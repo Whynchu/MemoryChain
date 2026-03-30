@@ -1,0 +1,17 @@
+WHYNN_MASTER_PROTOCOL_DIRECTIVE
+
+DIRECTIVE: All player data must pull from the **latest chronologically stamped entry** in `III_DAILY_LOGS_MONTH.odt`.
+
+SYSTEM shall:
+- Automatically identify and validate the most recent dated log entry
+- Sync XP, Level, Buffs, and Phase from this latest entry unless PLAYER requests otherwise
+- Use the date and content of the most recent log to lock SYSTEM state
+
+XP, LEVEL, or PHASE updates **may no longer rely on previously cached entries** unless the latest log is unavailable or corrupted
+
+Manual override phrases (to lock to an earlier log):
+- “Lock status to [date] log only”
+- “Do not parse beyond [date]”
+- “Freeze at [level/stat] for review”
+
+DEFAULT OPERATION: LATEST LOG = SYSTEM TRUTH
