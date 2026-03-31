@@ -40,6 +40,8 @@ def get_guided_prompts(repo: Repository, *, user_id: str) -> GuidedPromptsRespon
     )
     active_goals = [item for item in active_goals if item.snippet.startswith("[active]")]
 
+    attendance = repo.get_engagement_summary(user_id=user_id, window_days=7)
+
     return GuidedPromptsResponse(
         prompts=[
             GuidedPrompt(
@@ -66,6 +68,20 @@ def get_guided_prompts(repo: Repository, *, user_id: str) -> GuidedPromptsRespon
                 description="Goals currently marked active.",
                 results=active_goals,
             ),
+            GuidedPrompt(
+                id="attendance_this_week",
+                label="Attendance This Week",
+                description="Continuity and response behavior across recent prompt cycles.",
+                metadata={
+                    "window_days": attendance.window_days,
+                    "total_cycles": attendance.total_cycles,
+                    "responded_cycles": attendance.responded_cycles,
+                    "missed_cycles": attendance.missed_cycles,
+                    "viewed_no_response_cycles": attendance.viewed_no_response_cycles,
+                    "adherence_rate": attendance.adherence_rate,
+                    "longest_nonresponse_streak_days": attendance.longest_nonresponse_streak_days,
+                    "streak_resume_count": attendance.streak_resume_count,
+                },
+            ),
         ]
     )
-

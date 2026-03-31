@@ -96,6 +96,7 @@ def initialize(conn: sqlite3.Connection) -> None:
             slips_json TEXT NOT NULL,
             open_loops_json TEXT NOT NULL,
             recommended_next_actions_json TEXT NOT NULL,
+            engagement_notes_json TEXT NOT NULL DEFAULT '[]',
             source_ids_json TEXT NOT NULL,
             confidence REAL
         );
@@ -120,11 +121,67 @@ def initialize(conn: sqlite3.Connection) -> None:
             FOREIGN KEY (source_document_id) REFERENCES source_documents(id)
         );
 
+        CREATE TABLE IF NOT EXISTS prompt_cycles (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            cycle_date TEXT NOT NULL,
+            scheduled_for TEXT NOT NULL,
+            sent_at TEXT,
+            expires_at TEXT,
+            status TEXT NOT NULL,
+            response_source_document_id TEXT,
+            response_at TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (response_source_document_id) REFERENCES source_documents(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS engagement_events (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            prompt_cycle_id TEXT,
+            event_type TEXT NOT NULL,
+            event_at TEXT NOT NULL,
+            metadata_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (prompt_cycle_id) REFERENCES prompt_cycles(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS audit_logs (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            entity_type TEXT NOT NULL,
+            entity_id TEXT NOT NULL,
+            action TEXT NOT NULL,
+            before_json TEXT NOT NULL,
+            after_json TEXT NOT NULL,
+            changed_fields_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+
         CREATE INDEX IF NOT EXISTS idx_messages_conversation_created
         ON conversation_messages (conversation_id, created_at);
 
         CREATE INDEX IF NOT EXISTS idx_messages_user_created
         ON conversation_messages (user_id, created_at);
+
+        CREATE INDEX IF NOT EXISTS idx_prompt_cycles_user_date
+        ON prompt_cycles (user_id, cycle_date);
+
+        CREATE INDEX IF NOT EXISTS idx_engagement_events_user_time
+        ON engagement_events (user_id, event_at);
+
+        CREATE INDEX IF NOT EXISTS idx_audit_logs_user_created
+        ON audit_logs (user_id, created_at);
         """
     )
+
+    columns = {
+        row["name"] for row in conn.execute("PRAGMA table_info(weekly_reviews)").fetchall()
+    }
+    if "engagement_notes_json" not in columns:
+        conn.execute(
+            "ALTER TABLE weekly_reviews ADD COLUMN engagement_notes_json TEXT NOT NULL DEFAULT '[]'"
+        )
+
     conn.commit()

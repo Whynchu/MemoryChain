@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 import hashlib
 import json
 import sqlite3
@@ -11,15 +11,21 @@ from ..schemas import (
     ConversationMessage,
     DailyCheckin,
     DailyCheckinCreate,
+    AuditLogEntry,
+    EngagementEvent,
+    EngagementSummary,
     Goal,
     GoalCreate,
+    GoalUpdate,
     JournalEntry,
     JournalEntryCreate,
+    PromptCycle,
     SearchResult,
     SourceDocument,
     SourceDocumentCreate,
     Task,
     TaskCreate,
+    TaskUpdate,
     WeeklyReview,
 )
 
@@ -192,11 +198,90 @@ class Repository:
         row = self.conn.execute("SELECT * FROM goals WHERE id = ?", (goal_id,)).fetchone()
         return self._row_to_goal(row)
 
-    def list_goals(self, user_id: str) -> list[Goal]:
+    def list_goals(self, user_id: str, limit: int = 100, offset: int = 0) -> list[Goal]:
         rows = self.conn.execute(
-            "SELECT * FROM goals WHERE user_id = ? ORDER BY created_at DESC", (user_id,)
+            """
+            SELECT * FROM goals
+            WHERE user_id = ?
+            ORDER BY created_at DESC
+            LIMIT ? OFFSET ?
+            """,
+            (user_id, limit, offset),
         ).fetchall()
         return [self._row_to_goal(row) for row in rows]
+
+    def get_goal(self, *, goal_id: str, user_id: str) -> Goal | None:
+        row = self.conn.execute(
+            "SELECT * FROM goals WHERE id = ? AND user_id = ?",
+            (goal_id, user_id),
+        ).fetchone()
+        return self._row_to_goal(row) if row else None
+    def update_goal(self, *, goal_id: str, user_id: str, payload: GoalUpdate) -> Goal | None:
+        updates = payload.model_dump(exclude_unset=True)
+        if not updates:
+            row = self.conn.execute(
+                "SELECT * FROM goals WHERE id = ? AND user_id = ?",
+                (goal_id, user_id),
+            ).fetchone()
+            return self._row_to_goal(row) if row else None
+
+        existing_row = self.conn.execute(
+            "SELECT * FROM goals WHERE id = ? AND user_id = ?",
+            (goal_id, user_id),
+        ).fetchone()
+        if not existing_row:
+            return None
+        before_goal = self._row_to_goal(existing_row)
+
+        now = _now_iso()
+        fields: list[str] = []
+        values: list[object] = []
+
+        if "title" in updates:
+            fields.append("title = ?")
+            values.append(updates["title"])
+        if "description" in updates:
+            fields.append("description = ?")
+            values.append(updates["description"])
+        if "status" in updates:
+            fields.append("status = ?")
+            values.append(updates["status"])
+        if "priority" in updates:
+            fields.append("priority = ?")
+            values.append(updates["priority"])
+        if "target_date" in updates:
+            fields.append("target_date = ?")
+            values.append(_date_to_iso(updates["target_date"]))
+
+        fields.append("updated_at = ?")
+        values.append(now)
+        values.extend([goal_id, user_id])
+
+        cursor = self.conn.execute(
+            f"UPDATE goals SET {', '.join(fields)} WHERE id = ? AND user_id = ?",
+            tuple(values),
+        )
+        self.conn.commit()
+        if cursor.rowcount == 0:
+            return None
+
+        row = self.conn.execute(
+            "SELECT * FROM goals WHERE id = ? AND user_id = ?",
+            (goal_id, user_id),
+        ).fetchone()
+        updated_goal = self._row_to_goal(row) if row else None
+        if updated_goal is not None:
+            self._record_audit_log(
+                user_id=user_id,
+                entity_type="goal",
+                entity_id=goal_id,
+                action="update",
+                before=before_goal.model_dump(mode="json"),
+                after=updated_goal.model_dump(mode="json"),
+                changed_fields=sorted(list(updates.keys())),
+            )
+            self.conn.commit()
+        return updated_goal
 
     def create_task(self, payload: TaskCreate) -> Task:
         now = _now_iso()
@@ -227,13 +312,625 @@ class Repository:
         row = self.conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
         return self._row_to_task(row)
 
-    def list_tasks(self, user_id: str) -> list[Task]:
+    def list_tasks(self, user_id: str, limit: int = 100, offset: int = 0) -> list[Task]:
         rows = self.conn.execute(
-            "SELECT * FROM tasks WHERE user_id = ? ORDER BY created_at DESC", (user_id,)
+            """
+            SELECT * FROM tasks
+            WHERE user_id = ?
+            ORDER BY created_at DESC
+            LIMIT ? OFFSET ?
+            """,
+            (user_id, limit, offset),
         ).fetchall()
         return [self._row_to_task(row) for row in rows]
 
+    def get_task(self, *, task_id: str, user_id: str) -> Task | None:
+        row = self.conn.execute(
+            "SELECT * FROM tasks WHERE id = ? AND user_id = ?",
+            (task_id, user_id),
+        ).fetchone()
+        return self._row_to_task(row) if row else None
+    def update_task(self, *, task_id: str, user_id: str, payload: TaskUpdate) -> Task | None:
+        updates = payload.model_dump(exclude_unset=True)
+        if not updates:
+            row = self.conn.execute(
+                "SELECT * FROM tasks WHERE id = ? AND user_id = ?",
+                (task_id, user_id),
+            ).fetchone()
+            return self._row_to_task(row) if row else None
 
+        existing_row = self.conn.execute(
+            "SELECT * FROM tasks WHERE id = ? AND user_id = ?",
+            (task_id, user_id),
+        ).fetchone()
+        if not existing_row:
+            return None
+        before_task = self._row_to_task(existing_row)
+
+        now = _now_iso()
+        fields: list[str] = []
+        values: list[object] = []
+
+        if "title" in updates:
+            fields.append("title = ?")
+            values.append(updates["title"])
+        if "goal_id" in updates:
+            fields.append("goal_id = ?")
+            values.append(updates["goal_id"])
+        if "description" in updates:
+            fields.append("description = ?")
+            values.append(updates["description"])
+        if "status" in updates:
+            fields.append("status = ?")
+            values.append(updates["status"])
+            if updates["status"] == "done":
+                fields.append("completed_at = ?")
+                values.append(now)
+            else:
+                fields.append("completed_at = ?")
+                values.append(None)
+        if "priority" in updates:
+            fields.append("priority = ?")
+            values.append(updates["priority"])
+        if "due_at" in updates:
+            fields.append("due_at = ?")
+            values.append(updates["due_at"].isoformat() if updates["due_at"] else None)
+
+        fields.append("updated_at = ?")
+        values.append(now)
+        values.extend([task_id, user_id])
+
+        cursor = self.conn.execute(
+            f"UPDATE tasks SET {', '.join(fields)} WHERE id = ? AND user_id = ?",
+            tuple(values),
+        )
+        self.conn.commit()
+        if cursor.rowcount == 0:
+            return None
+
+        row = self.conn.execute(
+            "SELECT * FROM tasks WHERE id = ? AND user_id = ?",
+            (task_id, user_id),
+        ).fetchone()
+        updated_task = self._row_to_task(row) if row else None
+        if updated_task is not None:
+            self._record_audit_log(
+                user_id=user_id,
+                entity_type="task",
+                entity_id=task_id,
+                action="update",
+                before=before_task.model_dump(mode="json"),
+                after=updated_task.model_dump(mode="json"),
+                changed_fields=sorted(list(updates.keys())),
+            )
+            self.conn.commit()
+        return updated_task
+
+    def _record_engagement_event(
+        self,
+        *,
+        user_id: str,
+        event_type: str,
+        event_at: datetime,
+        prompt_cycle_id: str | None = None,
+        metadata: dict | None = None,
+    ) -> EngagementEvent:
+        event_id = _new_id("evt")
+        created_at = _now_iso()
+        metadata_value = metadata or {}
+        self.conn.execute(
+            """
+            INSERT INTO engagement_events (
+                id, user_id, prompt_cycle_id, event_type, event_at, metadata_json, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                event_id,
+                user_id,
+                prompt_cycle_id,
+                event_type,
+                event_at.isoformat(),
+                _to_json(metadata_value),
+                created_at,
+            ),
+        )
+        row = self.conn.execute("SELECT * FROM engagement_events WHERE id = ?", (event_id,)).fetchone()
+        return self._row_to_engagement_event(row)
+
+
+    def _record_audit_log(
+        self,
+        *,
+        user_id: str,
+        entity_type: str,
+        entity_id: str,
+        action: str,
+        before: dict,
+        after: dict,
+        changed_fields: list[str],
+    ) -> AuditLogEntry:
+        log_id = _new_id("audit")
+        created_at = _now_iso()
+        self.conn.execute(
+            """
+            INSERT INTO audit_logs (
+                id, user_id, entity_type, entity_id, action,
+                before_json, after_json, changed_fields_json, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                log_id,
+                user_id,
+                entity_type,
+                entity_id,
+                action,
+                _to_json(before),
+                _to_json(after),
+                _to_json(changed_fields),
+                created_at,
+            ),
+        )
+        row = self.conn.execute("SELECT * FROM audit_logs WHERE id = ?", (log_id,)).fetchone()
+        return self._row_to_audit_log(row)
+
+    def list_audit_logs(
+        self,
+        *,
+        user_id: str,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[AuditLogEntry]:
+        rows = self.conn.execute(
+            """
+            SELECT * FROM audit_logs
+            WHERE user_id = ?
+            ORDER BY created_at DESC
+            LIMIT ? OFFSET ?
+            """,
+            (user_id, limit, offset),
+        ).fetchall()
+        return [self._row_to_audit_log(row) for row in rows]
+
+    def rollback_audit_log(
+        self,
+        *,
+        user_id: str,
+        audit_log_id: str,
+    ) -> AuditLogEntry | None:
+        row = self.conn.execute(
+            "SELECT * FROM audit_logs WHERE id = ? AND user_id = ?",
+            (audit_log_id, user_id),
+        ).fetchone()
+        if row is None:
+            return None
+
+        audit_entry = self._row_to_audit_log(row)
+        if not audit_entry.before:
+            raise ValueError("Audit entry has no restorable state")
+
+        if audit_entry.entity_type == "goal":
+            return self._rollback_goal(audit_entry=audit_entry)
+        if audit_entry.entity_type == "task":
+            return self._rollback_task(audit_entry=audit_entry)
+        raise ValueError(f"Unsupported entity type for rollback: {audit_entry.entity_type}")
+
+    def _rollback_goal(self, *, audit_entry: AuditLogEntry) -> AuditLogEntry:
+        row = self.conn.execute(
+            "SELECT * FROM goals WHERE id = ? AND user_id = ?",
+            (audit_entry.entity_id, audit_entry.user_id),
+        ).fetchone()
+        if row is None:
+            raise ValueError("Goal not found for rollback")
+
+        current_goal = self._row_to_goal(row)
+        before_snapshot = audit_entry.before
+        now = _now_iso()
+        self.conn.execute(
+            """
+            UPDATE goals
+            SET title = ?, description = ?, status = ?, priority = ?, target_date = ?, updated_at = ?
+            WHERE id = ? AND user_id = ?
+            """,
+            (
+                before_snapshot.get("title"),
+                before_snapshot.get("description"),
+                before_snapshot.get("status"),
+                before_snapshot.get("priority"),
+                before_snapshot.get("target_date"),
+                now,
+                audit_entry.entity_id,
+                audit_entry.user_id,
+            ),
+        )
+
+        restored_row = self.conn.execute(
+            "SELECT * FROM goals WHERE id = ? AND user_id = ?",
+            (audit_entry.entity_id, audit_entry.user_id),
+        ).fetchone()
+        restored_goal = self._row_to_goal(restored_row)
+        rollback_log = self._record_audit_log(
+            user_id=audit_entry.user_id,
+            entity_type="goal",
+            entity_id=audit_entry.entity_id,
+            action="rollback",
+            before=current_goal.model_dump(mode="json"),
+            after=restored_goal.model_dump(mode="json"),
+            changed_fields=self._changed_fields(
+                before=current_goal.model_dump(mode="json"),
+                after=restored_goal.model_dump(mode="json"),
+            ),
+        )
+        self.conn.commit()
+        return rollback_log
+
+    def _rollback_task(self, *, audit_entry: AuditLogEntry) -> AuditLogEntry:
+        row = self.conn.execute(
+            "SELECT * FROM tasks WHERE id = ? AND user_id = ?",
+            (audit_entry.entity_id, audit_entry.user_id),
+        ).fetchone()
+        if row is None:
+            raise ValueError("Task not found for rollback")
+
+        current_task = self._row_to_task(row)
+        before_snapshot = audit_entry.before
+        now = _now_iso()
+        self.conn.execute(
+            """
+            UPDATE tasks
+            SET title = ?, goal_id = ?, description = ?, status = ?, priority = ?,
+                due_at = ?, completed_at = ?, updated_at = ?
+            WHERE id = ? AND user_id = ?
+            """,
+            (
+                before_snapshot.get("title"),
+                before_snapshot.get("goal_id"),
+                before_snapshot.get("description"),
+                before_snapshot.get("status"),
+                before_snapshot.get("priority"),
+                before_snapshot.get("due_at"),
+                before_snapshot.get("completed_at"),
+                now,
+                audit_entry.entity_id,
+                audit_entry.user_id,
+            ),
+        )
+
+        restored_row = self.conn.execute(
+            "SELECT * FROM tasks WHERE id = ? AND user_id = ?",
+            (audit_entry.entity_id, audit_entry.user_id),
+        ).fetchone()
+        restored_task = self._row_to_task(restored_row)
+        rollback_log = self._record_audit_log(
+            user_id=audit_entry.user_id,
+            entity_type="task",
+            entity_id=audit_entry.entity_id,
+            action="rollback",
+            before=current_task.model_dump(mode="json"),
+            after=restored_task.model_dump(mode="json"),
+            changed_fields=self._changed_fields(
+                before=current_task.model_dump(mode="json"),
+                after=restored_task.model_dump(mode="json"),
+            ),
+        )
+        self.conn.commit()
+        return rollback_log
+
+    def _changed_fields(self, *, before: dict, after: dict) -> list[str]:
+        all_fields = set(before.keys()) | set(after.keys())
+        return sorted([field for field in all_fields if before.get(field) != after.get(field)])
+
+    def create_prompt_cycle(
+        self,
+        *,
+        user_id: str,
+        cycle_date: date,
+        scheduled_for: datetime,
+        expires_at: datetime | None = None,
+    ) -> PromptCycle:
+        existing = self.conn.execute(
+            "SELECT * FROM prompt_cycles WHERE user_id = ? AND cycle_date = ?",
+            (user_id, cycle_date.isoformat()),
+        ).fetchone()
+        if existing:
+            return self._row_to_prompt_cycle(existing)
+
+        now = _now_iso()
+        cycle_id = _new_id("pc")
+        self.conn.execute(
+            """
+            INSERT INTO prompt_cycles (
+                id, user_id, cycle_date, scheduled_for, sent_at, expires_at,
+                status, response_source_document_id, response_at, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                cycle_id,
+                user_id,
+                cycle_date.isoformat(),
+                scheduled_for.isoformat(),
+                None,
+                expires_at.isoformat() if expires_at else None,
+                "pending",
+                None,
+                None,
+                now,
+                now,
+            ),
+        )
+        self._record_engagement_event(
+            user_id=user_id,
+            event_type="prompt_scheduled",
+            event_at=scheduled_for,
+            prompt_cycle_id=cycle_id,
+            metadata={"cycle_date": cycle_date.isoformat()},
+        )
+        self.conn.commit()
+        row = self.conn.execute("SELECT * FROM prompt_cycles WHERE id = ?", (cycle_id,)).fetchone()
+        return self._row_to_prompt_cycle(row)
+
+    def list_prompt_cycles(
+        self,
+        *,
+        user_id: str,
+        date_from: date | None = None,
+        date_to: date | None = None,
+    ) -> list[PromptCycle]:
+        sql = "SELECT * FROM prompt_cycles WHERE user_id = ?"
+        params: list[object] = [user_id]
+        if date_from:
+            sql += " AND cycle_date >= ?"
+            params.append(date_from.isoformat())
+        if date_to:
+            sql += " AND cycle_date <= ?"
+            params.append(date_to.isoformat())
+        sql += " ORDER BY cycle_date DESC, created_at DESC"
+        rows = self.conn.execute(sql, tuple(params)).fetchall()
+        return [self._row_to_prompt_cycle(row) for row in rows]
+
+
+    def get_engagement_summary(
+        self,
+        *,
+        user_id: str,
+        window_days: int,
+        as_of: date | None = None,
+    ) -> EngagementSummary:
+        if window_days <= 0:
+            raise ValueError("window_days must be positive")
+
+        window_end = as_of or datetime.now(timezone.utc).date()
+        window_start = window_end - timedelta(days=window_days - 1)
+
+        rows = self.conn.execute(
+            """
+            SELECT *
+            FROM prompt_cycles
+            WHERE user_id = ? AND cycle_date BETWEEN ? AND ?
+            ORDER BY cycle_date ASC
+            """,
+            (user_id, window_start.isoformat(), window_end.isoformat()),
+        ).fetchall()
+
+        total_cycles = len(rows)
+        responded_cycles = 0
+        missed_cycles = 0
+        viewed_no_response_cycles = 0
+        pending_cycles = 0
+
+        response_delays: list[float] = []
+        longest_nonresponse_streak = 0
+        current_nonresponse_streak = 0
+
+        for row in rows:
+            status = row["status"]
+            if status == "responded":
+                responded_cycles += 1
+                current_nonresponse_streak = 0
+                if row["sent_at"] and row["response_at"]:
+                    sent_at = datetime.fromisoformat(row["sent_at"])
+                    response_at = datetime.fromisoformat(row["response_at"])
+                    delta_minutes = (response_at - sent_at).total_seconds() / 60.0
+                    if delta_minutes >= 0:
+                        response_delays.append(delta_minutes)
+            elif status == "missed":
+                missed_cycles += 1
+                current_nonresponse_streak += 1
+            elif status == "viewed_no_response":
+                viewed_no_response_cycles += 1
+                current_nonresponse_streak += 1
+            else:
+                pending_cycles += 1
+                current_nonresponse_streak += 1
+
+            if current_nonresponse_streak > longest_nonresponse_streak:
+                longest_nonresponse_streak = current_nonresponse_streak
+
+        streak_resume_row = self.conn.execute(
+            """
+            SELECT COUNT(*) AS count
+            FROM engagement_events
+            WHERE user_id = ?
+              AND event_type = 'streak_resumed'
+              AND date(event_at) BETWEEN ? AND ?
+            """,
+            (user_id, window_start.isoformat(), window_end.isoformat()),
+        ).fetchone()
+        streak_resume_count = int(streak_resume_row["count"]) if streak_resume_row else 0
+
+        adherence_rate = (responded_cycles / total_cycles) if total_cycles > 0 else None
+        open_without_entry_rate = (viewed_no_response_cycles / total_cycles) if total_cycles > 0 else None
+        avg_response_delay_minutes = (
+            sum(response_delays) / len(response_delays) if response_delays else None
+        )
+
+        return EngagementSummary(
+            user_id=user_id,
+            window_days=window_days,
+            window_start=window_start,
+            window_end=window_end,
+            total_cycles=total_cycles,
+            responded_cycles=responded_cycles,
+            missed_cycles=missed_cycles,
+            viewed_no_response_cycles=viewed_no_response_cycles,
+            pending_cycles=pending_cycles,
+            adherence_rate=adherence_rate,
+            avg_response_delay_minutes=avg_response_delay_minutes,
+            longest_nonresponse_streak_days=longest_nonresponse_streak,
+            open_without_entry_rate=open_without_entry_rate,
+            streak_resume_count=streak_resume_count,
+        )
+    def _transition_prompt_cycle(
+        self,
+        *,
+        cycle_id: str,
+        user_id: str,
+        target_status: str | None,
+        event_type: str,
+        event_at: datetime,
+        metadata: dict | None = None,
+        response_source_document_id: str | None = None,
+    ) -> PromptCycle | None:
+        row = self.conn.execute(
+            "SELECT * FROM prompt_cycles WHERE id = ? AND user_id = ?",
+            (cycle_id, user_id),
+        ).fetchone()
+        if not row:
+            return None
+
+        current = self._row_to_prompt_cycle(row)
+
+        if event_type == "prompt_sent":
+            if current.sent_at is not None:
+                raise ValueError("Prompt already sent")
+        elif event_type == "prompt_viewed_no_response":
+            if current.status != "pending":
+                raise ValueError("Can only mark viewed from pending")
+        elif event_type == "prompt_responded":
+            if current.status not in ("pending", "viewed_no_response"):
+                raise ValueError("Can only mark responded from pending or viewed_no_response")
+            if not response_source_document_id:
+                raise ValueError("response_source_document_id is required")
+        elif event_type == "missed_checkin":
+            if current.status not in ("pending", "viewed_no_response"):
+                raise ValueError("Can only mark missed from pending or viewed_no_response")
+
+        fields: list[str] = ["updated_at = ?"]
+        values: list[object] = [_now_iso()]
+
+        if event_type == "prompt_sent":
+            fields.append("sent_at = ?")
+            values.append(event_at.isoformat())
+
+        if target_status is not None:
+            fields.append("status = ?")
+            values.append(target_status)
+
+        if event_type == "prompt_responded":
+            fields.append("response_source_document_id = ?")
+            values.append(response_source_document_id)
+            fields.append("response_at = ?")
+            values.append(event_at.isoformat())
+
+        values.extend([cycle_id, user_id])
+        self.conn.execute(
+            f"UPDATE prompt_cycles SET {', '.join(fields)} WHERE id = ? AND user_id = ?",
+            tuple(values),
+        )
+
+        self._record_engagement_event(
+            user_id=user_id,
+            event_type=event_type,
+            event_at=event_at,
+            prompt_cycle_id=cycle_id,
+            metadata=metadata,
+        )
+
+        # If this response follows missed/viewed gaps, emit streak resumption signal.
+        if event_type == "prompt_responded" and current.status in ("missed", "viewed_no_response"):
+            self._record_engagement_event(
+                user_id=user_id,
+                event_type="streak_resumed",
+                event_at=event_at,
+                prompt_cycle_id=cycle_id,
+                metadata={"from_status": current.status},
+            )
+
+        self.conn.commit()
+        updated_row = self.conn.execute(
+            "SELECT * FROM prompt_cycles WHERE id = ? AND user_id = ?",
+            (cycle_id, user_id),
+        ).fetchone()
+        return self._row_to_prompt_cycle(updated_row) if updated_row else None
+
+    def send_prompt_cycle(
+        self,
+        *,
+        cycle_id: str,
+        user_id: str,
+        event_at: datetime,
+        metadata: dict | None = None,
+    ) -> PromptCycle | None:
+        return self._transition_prompt_cycle(
+            cycle_id=cycle_id,
+            user_id=user_id,
+            target_status=None,
+            event_type="prompt_sent",
+            event_at=event_at,
+            metadata=metadata,
+        )
+
+    def mark_prompt_cycle_viewed(
+        self,
+        *,
+        cycle_id: str,
+        user_id: str,
+        event_at: datetime,
+        metadata: dict | None = None,
+    ) -> PromptCycle | None:
+        return self._transition_prompt_cycle(
+            cycle_id=cycle_id,
+            user_id=user_id,
+            target_status="viewed_no_response",
+            event_type="prompt_viewed_no_response",
+            event_at=event_at,
+            metadata=metadata,
+        )
+
+    def mark_prompt_cycle_responded(
+        self,
+        *,
+        cycle_id: str,
+        user_id: str,
+        event_at: datetime,
+        response_source_document_id: str,
+        metadata: dict | None = None,
+    ) -> PromptCycle | None:
+        return self._transition_prompt_cycle(
+            cycle_id=cycle_id,
+            user_id=user_id,
+            target_status="responded",
+            event_type="prompt_responded",
+            event_at=event_at,
+            metadata=metadata,
+            response_source_document_id=response_source_document_id,
+        )
+
+    def mark_prompt_cycle_missed(
+        self,
+        *,
+        cycle_id: str,
+        user_id: str,
+        event_at: datetime,
+        metadata: dict | None = None,
+    ) -> PromptCycle | None:
+        return self._transition_prompt_cycle(
+            cycle_id=cycle_id,
+            user_id=user_id,
+            target_status="missed",
+            event_type="missed_checkin",
+            event_at=event_at,
+            metadata=metadata,
+        )
     def search(
         self,
         *,
@@ -602,6 +1299,7 @@ class Repository:
         slips: list[str],
         open_loops: list[str],
         recommended_next_actions: list[str],
+        engagement_notes: list[str],
         source_ids: list[str],
         confidence: float | None,
     ) -> WeeklyReview:
@@ -612,8 +1310,8 @@ class Repository:
             INSERT INTO weekly_reviews (
                 id, user_id, created_at, week_start, week_end, summary,
                 wins_json, slips_json, open_loops_json,
-                recommended_next_actions_json, source_ids_json, confidence
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                recommended_next_actions_json, engagement_notes_json, source_ids_json, confidence
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 review_id,
@@ -626,6 +1324,7 @@ class Repository:
                 _to_json(slips),
                 _to_json(open_loops),
                 _to_json(recommended_next_actions),
+                _to_json(engagement_notes),
                 _to_json(source_ids),
                 confidence,
             ),
@@ -733,6 +1432,7 @@ class Repository:
             slips=json.loads(row["slips_json"]),
             open_loops=json.loads(row["open_loops_json"]),
             recommended_next_actions=json.loads(row["recommended_next_actions_json"]),
+            engagement_notes=json.loads(row["engagement_notes_json"] or "[]"),
             source_ids=json.loads(row["source_ids_json"]),
             confidence=row["confidence"],
         )
@@ -756,6 +1456,67 @@ class Repository:
             created_at=datetime.fromisoformat(row["created_at"]),
             source_document_id=row["source_document_id"],
         )
+
+
+
+
+
+
+
+
+
+
+
+
+    def _row_to_audit_log(self, row: sqlite3.Row) -> AuditLogEntry:
+        return AuditLogEntry(
+            id=row["id"],
+            user_id=row["user_id"],
+            entity_type=row["entity_type"],
+            entity_id=row["entity_id"],
+            action=row["action"],
+            before=json.loads(row["before_json"]),
+            after=json.loads(row["after_json"]),
+            changed_fields=json.loads(row["changed_fields_json"]),
+            created_at=datetime.fromisoformat(row["created_at"]),
+        )
+    def _row_to_prompt_cycle(self, row: sqlite3.Row) -> PromptCycle:
+        return PromptCycle(
+            id=row["id"],
+            user_id=row["user_id"],
+            cycle_date=date.fromisoformat(row["cycle_date"]),
+            scheduled_for=datetime.fromisoformat(row["scheduled_for"]),
+            sent_at=datetime.fromisoformat(row["sent_at"]) if row["sent_at"] else None,
+            expires_at=datetime.fromisoformat(row["expires_at"]) if row["expires_at"] else None,
+            status=row["status"],
+            response_source_document_id=row["response_source_document_id"],
+            response_at=datetime.fromisoformat(row["response_at"]) if row["response_at"] else None,
+            created_at=datetime.fromisoformat(row["created_at"]),
+            updated_at=datetime.fromisoformat(row["updated_at"]),
+        )
+
+    def _row_to_engagement_event(self, row: sqlite3.Row) -> EngagementEvent:
+        return EngagementEvent(
+            id=row["id"],
+            user_id=row["user_id"],
+            prompt_cycle_id=row["prompt_cycle_id"],
+            event_type=row["event_type"],
+            event_at=datetime.fromisoformat(row["event_at"]),
+            metadata=json.loads(row["metadata_json"]),
+            created_at=datetime.fromisoformat(row["created_at"]),
+        )
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

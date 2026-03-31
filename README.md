@@ -1,46 +1,55 @@
 # MemoryChain
 
-MemoryChain is a personal memory and execution system focused on turning daily logs into structured, queryable objects.
+MemoryChain is a personal memory and execution backend that turns daily logs and interactions into structured, queryable behavioral data.
 
-Current state: early V1 backend. The API is usable and tested, but still intentionally lightweight.
+Current state: V1 backend is active and tested.
 
 ## What It Can Do Right Now
 
-- Capture chat messages and persist conversation history.
-- Extract structured memory objects from chat text:
+- Capture chat and persist conversation memory.
+- Extract structured objects from chat text:
   - `JournalEntry`
   - optional `DailyCheckin` (sleep/mood/energy)
   - `Task` from `todo:`
   - `Goal` from `goal:`
-- Store and list core authored objects:
-  - goals
-  - tasks
-  - journal entries
-  - check-ins
-- Generate deterministic weekly reviews.
-- Search across memory objects with filters:
+- Create, list, fetch, and update core objects:
+  - goals (`limit`/`offset` pagination on list)
+  - tasks (`limit`/`offset` pagination on list)
+  - journal entries (list)
+  - check-ins (list)
+- Generate weekly reviews with continuity-aware metrics.
+  - includes `engagement_notes` (adherence, missed cycles, streak gaps)
+- Search memory with filters:
   - keyword (`q`)
   - type (`source_document`, `journal_entry`, `daily_checkin`, `task`, `goal`)
   - date range (`from`, `to`)
   - journal tag (`tag`)
-- Return guided prompt bundles for UI consumption:
+- Return guided prompt bundles:
   - open tasks
   - recent check-ins
   - recent journal
   - active goals
+  - attendance this week (engagement metadata)
+- Track continuity events (presence + non-response):
+  - prompt cycle lifecycle (`scheduled`, `sent`, `viewed_no_response`, `responded`, `missed`)
+  - engagement summary metrics (`7d` / `30d` windows)
+- Track correction history and rollback changes for authored objects:
+  - append-only audit log entries for goal/task updates
+  - rollback endpoint that restores the selected audit entry's prior state
 
 ## What It Is Not Yet
 
 - No frontend app yet (backend-first phase).
-- No semantic/vector search yet (keyword search only).
-- No advanced insight/heuristic lifecycle implementation yet.
+- No semantic/vector search (keyword search only).
+- No full insight/heuristic lifecycle engine yet.
 - No multi-user auth system (static API key only).
 
 ## Repo Layout
 
-- `apps/api` - FastAPI backend (current build focus)
-- `docs/` - architecture notes, schema docs, open decisions
-- `users/` and `core/` - source material and legacy references
+- `apps/api` - FastAPI backend (main build target)
+- `docs/` - architecture notes, schemas, decisions
+  - continuity plan: `docs/architecture/CONTINUITY_SIGNALS_PLAN.md`
+- `users/` and `core/` - source material / legacy references
 
 ## Quick Start (API)
 
@@ -53,13 +62,13 @@ python -m pip install -e .
 python -m pip install pytest
 ```
 
-3. Run the API:
+3. Run API:
 
 ```bash
 python -m uvicorn memorychain_api.main:app --reload
 ```
 
-4. API auth header (default):
+4. Default auth header:
 
 - Header: `X-API-Key`
 - Value: `dev-key`
@@ -77,28 +86,49 @@ python -m uvicorn memorychain_api.main:app --reload
 Health:
 - `GET /health`
 
-Chat & memory capture:
+Chat:
 - `POST /api/v1/chat`
 - `GET /api/v1/conversations/{conversation_id}/messages`
 
 Ingestion:
 - `POST /api/v1/ingest`
 
-Core objects:
-- `GET /api/v1/goals`
+Goals:
 - `POST /api/v1/goals`
-- `GET /api/v1/tasks`
+- `GET /api/v1/goals?user_id=...&limit=...&offset=...`
+- `GET /api/v1/goals/{goal_id}?user_id=...`
+- `PUT /api/v1/goals/{goal_id}`
+
+Tasks:
 - `POST /api/v1/tasks`
+- `GET /api/v1/tasks?user_id=...&limit=...&offset=...`
+- `GET /api/v1/tasks/{task_id}?user_id=...`
+- `PUT /api/v1/tasks/{task_id}`
+
+Journal / Check-ins:
 - `GET /api/v1/journal-entries`
 - `GET /api/v1/checkins`
 
-Weekly review:
+Weekly Reviews:
 - `POST /api/v1/weekly-reviews/generate`
 - `GET /api/v1/weekly-reviews`
 
-Search & retrieval:
+Search & Prompts:
 - `GET /api/v1/search`
 - `GET /api/v1/prompts`
+
+Continuity / Engagement:
+- `POST /api/v1/prompt-cycles/schedule`
+- `POST /api/v1/prompt-cycles/{id}/send`
+- `POST /api/v1/prompt-cycles/{id}/viewed`
+- `POST /api/v1/prompt-cycles/{id}/responded`
+- `POST /api/v1/prompt-cycles/{id}/missed`
+- `GET /api/v1/prompt-cycles`
+- `GET /api/v1/engagement/summary`
+
+Audit / Rollback:
+- `GET /api/v1/audit-log?user_id=...&limit=...&offset=...`
+- `POST /api/v1/audit-log/{audit_log_id}/rollback?user_id=...`
 
 ## Example Calls
 
@@ -114,17 +144,17 @@ curl -X POST http://127.0.0.1:8000/api/v1/chat \
   }'
 ```
 
-Search tasks by keyword:
+Search tasks:
 
 ```bash
 curl "http://127.0.0.1:8000/api/v1/search?user_id=sam&type=task&q=outline" \
   -H "X-API-Key: dev-key"
 ```
 
-Guided prompt bundles:
+Engagement summary:
 
 ```bash
-curl "http://127.0.0.1:8000/api/v1/prompts?user_id=sam" \
+curl "http://127.0.0.1:8000/api/v1/engagement/summary?user_id=sam&window=7d" \
   -H "X-API-Key: dev-key"
 ```
 
@@ -136,11 +166,10 @@ From repo root:
 python -m pytest apps/api/tests/test_api.py -q
 ```
 
-Current baseline in this workspace: all tests pass.
+Current baseline in this workspace: `16 passed, 1 warning`.
 
-## Near-Term Build Plan
+## Near-Term Backend Plan
 
-- Expand guided prompts into richer retrieval workflows.
-- Add stronger filtering/sorting and pagination in search.
-- Improve weekly review quality and evidence traceability.
-- Start minimal web UI once API contracts stabilize.
+- Expand engagement summaries (time-window quality + trend deltas).
+- Continue hardening weekly review evidence/citation structure.
+- Add rollback guardrails (policy checks + dry-run preview mode).

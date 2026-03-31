@@ -24,6 +24,17 @@ Priority = Literal["low", "medium", "high"]
 InsightStatus = Literal["candidate", "active", "rejected", "archived"]
 MessageRole = Literal["user", "assistant", "system"]
 SearchObjectType = Literal["source_document", "journal_entry", "daily_checkin", "task", "goal"]
+PromptCycleStatus = Literal["pending", "viewed_no_response", "responded", "missed"]
+EngagementEventType = Literal[
+    "prompt_scheduled",
+    "prompt_sent",
+    "prompt_viewed_no_response",
+    "prompt_responded",
+    "missed_checkin",
+    "streak_resumed",
+    "app_open_no_entry",
+    "partial_entry",
+]
 
 
 class SourceDocumentCreate(BaseModel):
@@ -137,6 +148,14 @@ class GoalCreate(BaseModel):
     target_date: date | None = None
 
 
+class GoalUpdate(BaseModel):
+    title: str | None = Field(default=None, min_length=1)
+    description: str | None = None
+    status: GoalStatus | None = None
+    priority: Priority | None = None
+    target_date: date | None = None
+
+
 class Goal(BaseModel):
     id: str
     user_id: str
@@ -159,6 +178,15 @@ class TaskCreate(BaseModel):
     due_at: datetime | None = None
 
 
+class TaskUpdate(BaseModel):
+    title: str | None = Field(default=None, min_length=1)
+    goal_id: str | None = None
+    description: str | None = None
+    status: TaskStatus | None = None
+    priority: Priority | None = None
+    due_at: datetime | None = None
+
+
 class Task(BaseModel):
     id: str
     user_id: str
@@ -173,6 +201,75 @@ class Task(BaseModel):
     completed_at: datetime | None = None
 
 
+class PromptCycleScheduleRequest(BaseModel):
+    user_id: str
+    cycle_date: date
+    scheduled_for: datetime
+    expires_at: datetime | None = None
+
+
+class PromptCycleEventRequest(BaseModel):
+    user_id: str
+    event_at: datetime | None = None
+    metadata: dict = Field(default_factory=dict)
+
+
+class PromptCycleRespondRequest(PromptCycleEventRequest):
+    response_source_document_id: str
+
+
+class PromptCycle(BaseModel):
+    id: str
+    user_id: str
+    cycle_date: date
+    scheduled_for: datetime
+    sent_at: datetime | None = None
+    expires_at: datetime | None = None
+    status: PromptCycleStatus
+    response_source_document_id: str | None = None
+    response_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class EngagementEvent(BaseModel):
+    id: str
+    user_id: str
+    prompt_cycle_id: str | None = None
+    event_type: EngagementEventType
+    event_at: datetime
+    metadata: dict = Field(default_factory=dict)
+    created_at: datetime
+
+
+
+class EngagementSummary(BaseModel):
+    user_id: str
+    window_days: int
+    window_start: date
+    window_end: date
+    total_cycles: int
+    responded_cycles: int
+    missed_cycles: int
+    viewed_no_response_cycles: int
+    pending_cycles: int
+    adherence_rate: float | None = None
+    avg_response_delay_minutes: float | None = None
+    longest_nonresponse_streak_days: int = 0
+    open_without_entry_rate: float | None = None
+    streak_resume_count: int = 0
+
+
+class AuditLogEntry(BaseModel):
+    id: str
+    user_id: str
+    entity_type: str
+    entity_id: str
+    action: str
+    before: dict = Field(default_factory=dict)
+    after: dict = Field(default_factory=dict)
+    changed_fields: list[str] = Field(default_factory=list)
+    created_at: datetime
 class WeeklyReviewRequest(BaseModel):
     user_id: str
     week_start: date
@@ -190,6 +287,7 @@ class WeeklyReview(BaseModel):
     slips: list[str] = Field(default_factory=list)
     open_loops: list[str] = Field(default_factory=list)
     recommended_next_actions: list[str] = Field(default_factory=list)
+    engagement_notes: list[str] = Field(default_factory=list)
     source_ids: list[str] = Field(default_factory=list)
     confidence: float | None = None
 
@@ -249,9 +347,7 @@ class SearchResponse(BaseModel):
     results: list[SearchResult] = Field(default_factory=list)
 
 
-
-
-PromptId = Literal["open_tasks", "recent_checkins", "recent_journal", "active_goals"]
+PromptId = Literal["open_tasks", "recent_checkins", "recent_journal", "active_goals", "attendance_this_week"]
 
 
 class GuidedPrompt(BaseModel):
@@ -259,10 +355,13 @@ class GuidedPrompt(BaseModel):
     label: str
     description: str
     results: list[SearchResult] = Field(default_factory=list)
+    metadata: dict = Field(default_factory=dict)
 
 
 class GuidedPromptsResponse(BaseModel):
     prompts: list[GuidedPrompt] = Field(default_factory=list)
+
+
 class IngestRequest(BaseModel):
     source: SourceDocumentCreate
     journal_entry: IngestJournalEntry | None = None
@@ -274,5 +373,15 @@ class IngestResponse(BaseModel):
     journal_entry: JournalEntry | None = None
     checkin: DailyCheckin | None = None
     duplicate: bool = False
+
+
+
+
+
+
+
+
+
+
 
 
