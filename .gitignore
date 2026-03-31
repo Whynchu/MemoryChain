@@ -14,3 +14,12 @@ Desktop.ini
 *.log
 *.tmp
 *.temp
+
+# Python
+__pycache__/
+*.pyc
+
+# Local MemoryChain API data
+apps/api/*.db
+
+memorychain.db

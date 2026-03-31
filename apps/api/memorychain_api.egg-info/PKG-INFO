@@ -1,0 +1,11 @@
+Metadata-Version: 2.4
+Name: memorychain-api
+Version: 0.2.0
+Summary: MemoryChain V1 API
+Requires-Python: >=3.11
+Requires-Dist: fastapi<1.0.0,>=0.115.0
+Requires-Dist: uvicorn[standard]<1.0.0,>=0.30.0
+Requires-Dist: pydantic<3.0.0,>=2.8.0
+Requires-Dist: openai<2.0.0,>=1.40.0
+Provides-Extra: dev
+Requires-Dist: pytest<9.0.0,>=8.0.0; extra == "dev"
