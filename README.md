@@ -1,6 +1,6 @@
 # MemoryChain
 
-**Your personal operator. A memory and execution backend that learns your patterns, runs your protocols, and keeps you honest.**
+**A memory and execution backend that learns your patterns, runs your protocols, and keeps you honest.**
 
 A digital partner that lives alongside you, knows your habits, tracks your metrics, and runs your daily briefings. Not a chatbot. Not a dashboard. A personal system that understands *you* through conversation and structured check-ins, and turns that understanding into queryable behavioral data.
 
