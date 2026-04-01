@@ -1,125 +1,121 @@
 # MemoryChain
 
-**A personal memory and execution backend that turns daily logs and interactions into structured, queryable behavioral data.**
+**Your personal operator. A memory and execution backend that learns your patterns, runs your protocols, and keeps you honest.**
 
-MemoryChain separates *observations* (what happened) from *interpretations* (patterns) from *operational rules* (what to do about it). This prevents casual journal entries from accidentally becoming execution constraints.
+Think of it like a NetNavi — a digital partner that lives alongside you, knows your habits, tracks your metrics, and runs your daily briefings. Not a chatbot. Not a dashboard. A personal system that understands *you* through conversation and structured check-ins, and turns that understanding into queryable behavioral data.
 
-**Current state:** V0.2.0 — Backend is functional and tested. Ready for LLM extraction and insight engine.
+MemoryChain separates *observations* (what happened) from *interpretations* (patterns) from *operational rules* (what to do about it). Casual conversation never accidentally becomes an execution constraint — but real patterns get surfaced and tracked.
+
+**Current state:** v0.3.0 — Backend functional with 36 passing tests. Phase 0 foundation complete. Building toward conversational questionnaires and smart extraction.
+
+---
+
+## The Vision
+
+You talk to MemoryChain like you'd talk to a training partner who remembers everything:
+
+> **You:** "Morning check-in"
+> **MC:** "How'd you sleep?"
+> **You:** "About 7 hours, woke up once"
+> **MC:** "Mood 1-10?"
+> **You:** "Solid 7, feeling good"
+> **MC:** "Body weight?"
+> **You:** "183.5"
+> **MC:** ✅ *Morning check-in complete. Sleep 7h, mood 7/10, weight 183.5 lbs. You've logged 5 days straight.*
+
+Or just talk naturally:
+
+> **You:** "Did 30 minutes of mobility work, then 3 rounds of sparring. Felt sharp but my left shoulder is tight."
+> **MC:** *Logged: mobility session (30 min), sparring (3 rounds). Noted shoulder tightness. That's the third time this week — want me to flag it?*
+
+Two input modes, one consistent memory layer:
+- **Questionnaire mode** — structured Q&A for routine data (morning log, post-training debrief)
+- **Freeform mode** — natural conversation with automatic extraction
+
+The system doesn't just store — it *notices*. As data accumulates, patterns emerge: sleep quality drops when you train past 8pm. Recovery scores improve on weeks with 3+ mobility sessions. These become insights, and eventually operational heuristics.
 
 ---
 
 ## What It Can Do Right Now ✅
 
 **Core Ingestion:**
-- Capture chat messages and persist conversation memory
-- Extract structured objects from chat text (deterministic parsing):
-  - `JournalEntry` — reflective content
-  - `DailyCheckin` — sleep, mood, energy, metrics
-  - `Task` — from `todo:` prefix or chat context
-  - `Goal` — explicit goals or implied
-- Store as immutable `SourceDocument` with content hash (dedup)
+- Chat-based conversation with persistent memory
+- Automatic extraction from natural language:
+  - `Activity` — workouts, mobility, breathwork, recovery
+  - `MetricObservation` — body weight, heart rate, hydration, CO2 hold
+  - `DailyCheckin` — sleep, mood, energy
+  - `JournalEntry` — reflective content (noise-filtered)
+  - `Task` / `Goal` — from explicit markers or context
+- Immutable `SourceDocument` with content hash dedup
+- FTS5 full-text search across all object types
 
 **Data Management:**
-- Create, list, fetch, and update core objects (goals, tasks, journal entries, check-ins)
-- Pagination support (`limit`/`offset`)
-- Full audit logging for goal/task updates with rollback capability
-- Tag-based search and date range filtering
+- Full CRUD for 11 object types: goals, tasks, journal entries, check-ins, activities, metrics, protocols, protocol executions, insights, heuristics
+- Provenance tracking on all objects (`user`, `import`, `system_extracted`, `system_inferred`)
+- Pagination, audit logging, rollback capability
 
-**Analysis & Synthesis:**
-- Generate weekly reviews with continuity-aware engagement metrics
-  - Adherence rates (7d/30d), missed cycles, streak gaps
+**Analysis & Continuity:**
+- Weekly reviews with engagement metrics (adherence rates, streak gaps)
 - Guided prompt bundles (what to review, what's open, what's recent)
-- Keyword + type + date range search across all objects
-
-**Continuity Tracking:**
-- Prompt cycle lifecycle (`pending` → `viewed_no_response` → `responded` or `missed`)
-- Engagement events and event log (append-only)
-- Engagement summary metrics (7d / 30d windows)
-- Track presence and absence as separate signals
+- Prompt cycle lifecycle with engagement event tracking
+- Search across all objects by keyword, type, date range, tags
 
 ---
 
-## What It Is Not Yet ⚠️
+## What's Next 🚀
 
-- **Missing V1 objects** — Activity, MetricObservation, Protocol, ProtocolExecution, Insight, and Heuristic have no tables/CRUD yet
-- **No `provenance` column** — Schema rules require it on all objects; not yet implemented
-- **LLM extraction not yet wired** — Config exists, but deterministic parsing is still the default
-- **No insight/heuristic engine** — Schemas exist, promotion logic doesn't
-- **No frontend** — API-first; use curl, Postman, or CLI
-- **No semantic search** — Keyword search only (no FTS5 or embeddings)
-- **No multi-user** — Single-user with static API key
-- **Transaction gaps** — Some multi-step writes use separate commits (audit + entity)
+**See [NEXT_STEPS.md](./NEXT_STEPS.md) for the full roadmap.**
+
+**Building now — Phase 1: Conversational Questionnaires**
+1. Questionnaire templates (Morning Check-in, Post-Training Debrief, Evening Reflection)
+2. Session tracking — the system remembers where you are in a Q&A flow
+3. Answer parsing — "about 7 hours" → `sleep_hours: 7.0`
+4. Chat integration — questionnaires run inside the conversation, not a separate UI
+5. LLM-backed extraction upgrade — schema-prompted extraction with regex fallback
+
+**Then:**
+- Phase 2: Insight engine — pattern detection, confidence scoring, promotion/rejection
+- Phase 3: Heuristic rules — "if X then Y" operational logic derived from validated patterns
+- Phase 4: Daily workflow — CLI/mobile interface, scheduled briefings, the full operator experience
 
 ---
-
-## Next Steps 🚀
-
-**See [NEXT_STEPS.md](./NEXT_STEPS.md) for the full prioritized roadmap.**
-
-**Immediate priorities:**
-1. **Phase 0: Foundation fixes** — Add missing tables, provenance, fix transactions, FTS5, unify extraction service
-2. **Phase 1: Real data extraction** — Build WHYNN log parser, field extractors, LLM for freeform, bulk import
-3. **Phase 2: Insight engine** — Sleep-mood detector, promotion/rejection flow
-4. **Phase 3: Weekly review + audit** — LLM polish, full audit coverage
-5. **Phase 4: CLI + daily workflow** — Make it actually usable
-
-**Estimated to MVP:** ~8–10 weeks
 
 ## Repo Layout
 
 - `apps/api` — FastAPI backend (Python 3.11+)
-  - `routers/` — API endpoints (chat, ingest, goals, tasks, journal, etc.)
-  - `services/` — Business logic (ingestion, chat, LLM, reviews)
+  - `routers/` — API endpoints (chat, ingest, goals, tasks, activities, metrics, protocols, insights, heuristics, etc.)
+  - `services/` — Business logic (extraction, chat, ingestion, LLM, reviews)
   - `storage/` — Database layer (SQLite, repository pattern)
   - `schemas.py` — Pydantic models for all objects
 - `docs/` — Architecture, schemas, design decisions
-  - `NEXT_STEPS.md` — Prioritized roadmap to MVP
-  - `OPEN_DECISIONS.md` — Decision framework (locked and unlocked choices)
-  - `architecture/` — System design and continuity tracking plan
-  - `schemas/` — Object definitions and validation rules
-- `users/` — User data and logs (WHYNN historical logs in `users/Sam/logs/`)
+- `users/` — User data and historical logs
 - `core/` — Legacy reference materials
 
-## Quick Start (API)
-
-1. **Install dependencies:**
+## Quick Start
 
 ```bash
 cd apps/api
 python -m pip install -e .
 python -m pip install pytest
-```
 
-2. **Set environment variables (optional):**
+# Optional: configure LLM (works without it via regex extraction)
+export MEMORYCHAIN_LLM_PROVIDER=openai
+export OPENAI_API_KEY=sk-...
 
-```bash
-export MEMORYCHAIN_API_KEY=your-secret-key
-export MEMORYCHAIN_DB_PATH=./memorychain.db
-export MEMORYCHAIN_LLM_PROVIDER=openai  # or 'local'
-export OPENAI_API_KEY=sk-...  # if using OpenAI
-```
-
-3. **Run the API:**
-
-```bash
+# Run
 python -m uvicorn memorychain_api.main:app --reload
+
+# Test
+pytest tests/ -v  # 36 tests
 ```
 
-4. **API is live at** `http://localhost:8000`
-   - Docs: `http://localhost:8000/docs`
-   - Default auth header: `X-API-Key: dev-key`
-
-5. **Run tests:**
-
-```bash
-pytest tests/test_api.py -v
-```
+**API at** `http://localhost:8000` — Docs at `http://localhost:8000/docs` — Auth: `X-API-Key: dev-key`
 
 ---
 
-## Usage Example
+## Usage
 
-**Chat ingestion:**
+**Talk to it:**
 
 ```bash
 curl -X POST http://localhost:8000/api/v1/chat \
@@ -127,21 +123,17 @@ curl -X POST http://localhost:8000/api/v1/chat \
   -H "Content-Type: application/json" \
   -d '{
     "user_id": "user-1",
-    "message": "Had great sleep last night. 8 hours, felt refreshed. Planning a workout later.",
+    "message": "Slept 8 hours, mood 8/10. Did 30 minutes of mobility. Body weight 183 lbs.",
     "conversation_id": "conv-123"
   }'
 ```
 
-This extracts and stores:
-- `SourceDocument` (raw message)
-- `JournalEntry` (the reflection)
-- `DailyCheckin` (sleep: 8h)
-- `Activity` (workout planned)
+This extracts and stores: `DailyCheckin` (sleep 8h, mood 8), `Activity` (mobility 30min), `MetricObservation` (weight 183 lbs), `JournalEntry`, `SourceDocument`.
 
-**Search:**
+**Search your memory:**
 
 ```bash
-curl "http://localhost:8000/api/v1/search?q=workout&type=journal_entry" \
+curl "http://localhost:8000/api/v1/search?user_id=user-1&query=mobility&type=activity" \
   -H "X-API-Key: dev-key"
 ```
 
@@ -151,11 +143,7 @@ curl "http://localhost:8000/api/v1/search?q=workout&type=journal_entry" \
 curl -X POST http://localhost:8000/api/v1/reviews/generate \
   -H "X-API-Key: dev-key" \
   -H "Content-Type: application/json" \
-  -d '{
-    "user_id": "user-1",
-    "from": "2026-03-24",
-    "to": "2026-03-31"
-  }'
+  -d '{"user_id": "user-1", "from": "2026-03-24", "to": "2026-03-31"}'
 ```
 
 ---
@@ -164,80 +152,20 @@ curl -X POST http://localhost:8000/api/v1/reviews/generate \
 
 | Variable | Default | Notes |
 |----------|---------|-------|
-| `MEMORYCHAIN_API_KEY` | `dev-key` | Static key for auth; upgrade to JWT if multi-user |
-| `MEMORYCHAIN_DB_PATH` | `memorychain.db` | SQLite database file |
+| `MEMORYCHAIN_API_KEY` | `dev-key` | Auth key |
+| `MEMORYCHAIN_DB_PATH` | `memorychain.db` | SQLite database |
 | `MEMORYCHAIN_LLM_PROVIDER` | `local` | `local` or `openai` |
-| `MEMORYCHAIN_LLM_MODEL` | `gpt-4o-mini` | OpenAI model (if provider is openai) |
-| `OPENAI_API_KEY` | *(required if provider is openai)* | Your OpenAI API key |
-
----
-
-## Current API Surface
-
-### Health
-- `GET /health` — System status
-
-### Chat (Conversation Memory)
-- `POST /api/v1/chat` — Send message, extract objects, store in memory
-- `GET /api/v1/conversations/{conversation_id}/messages` — Retrieve conversation
-
-### Ingestion
-- `POST /api/v1/ingest` — Ingest raw SourceDocument + optionally structured objects
-
-### Core Objects
-- `POST /api/v1/goals` — Create goal
-- `GET /api/v1/goals?limit=10&offset=0` — List with pagination
-- `GET /api/v1/goals/{goal_id}` — Fetch detail
-- `PUT /api/v1/goals/{goal_id}` — Update
-
-- `POST /api/v1/tasks` — Create task
-- `GET /api/v1/tasks?limit=10&offset=0` — List
-- `GET /api/v1/tasks/{task_id}` — Fetch detail
-- `PUT /api/v1/tasks/{task_id}` — Update (includes status changes)
-
-- `GET /api/v1/journal` — List entries
-- `GET /api/v1/checkins` — List daily checkins
-
-### Analysis
-- `POST /api/v1/reviews/generate` — Generate weekly review for date range
-- `GET /api/v1/prompts/guided` — Get guided prompt bundle (what to focus on)
-
-### Search & Retrieval
-- `GET /api/v1/search?q=...&type=...&from=...&to=...&tag=...` — Search across all objects
-
-### Continuity Tracking
-- `POST /api/v1/prompt-cycles/{id}/viewed` — Mark prompt as viewed
-- `POST /api/v1/prompt-cycles/{id}/responded` — Record response
-- `POST /api/v1/prompt-cycles/{id}/missed` — Record missed checkin
-- `GET /api/v1/engagement/summary?window=7d|30d` — Adherence metrics
-
-### Audit & Corrections
-- `GET /api/v1/audit-log?object_id=...&object_type=...` — View change history
-- `POST /api/v1/audit-log/{entry_id}/rollback` — Restore to previous state
+| `MEMORYCHAIN_LLM_MODEL` | `gpt-4o-mini` | OpenAI model |
+| `OPENAI_API_KEY` | — | Required if using OpenAI |
 
 ---
 
 ## Testing
 
-All 16 tests pass:
+36 tests across 2 test files:
 
+```bash
+pytest tests/ -v
+# tests/test_api.py       — 16 tests (core API, chat, search, prompts, audit)
+# tests/test_phase0.py    — 20 tests (activities, metrics, protocols, insights, heuristics, FTS5, extraction)
 ```
-tests/test_api.py::test_health_open PASSED
-tests/test_api.py::test_auth_required PASSED
-tests/test_api.py::test_chat_creates_memory_objects PASSED
-tests/test_api.py::test_search_filters_by_type_and_keyword PASSED
-tests/test_api.py::test_search_tag_and_date_filters PASSED
-tests/test_api.py::test_guided_prompts_returns_bundles PASSED
-tests/test_api.py::test_update_goal PASSED
-tests/test_api.py::test_update_task_status_sets_and_clears_completed_at PASSED
-tests/test_api.py::test_prompt_cycle_lifecycle PASSED
-tests/test_api.py::test_prompt_cycle_invalid_transition_returns_conflict PASSED
-tests/test_api.py::test_engagement_summary_metrics PASSED
-tests/test_api.py::test_weekly_review_includes_engagement_signals PASSED
-tests/test_api.py::test_audit_log_records_goal_and_task_updates PASSED
-tests/test_api.py::test_audit_log_rollback_restores_goal_state PASSED
-tests/test_api.py::test_goal_detail_and_pagination PASSED
-tests/test_api.py::test_task_detail_and_pagination PASSED
-```
-
-Run: `pytest tests/test_api.py -v`
