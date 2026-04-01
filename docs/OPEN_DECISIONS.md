@@ -1,58 +1,36 @@
-# MemoryChain — Open Design Decisions
+# MemoryChain — Design Decisions
 
-> This document captures every unresolved question that must be answered before
-> (or during early) implementation. Each section frames the decision, lists
-> realistic options, notes trade-offs, and suggests a default where one exists.
+> This document captures every major design decision — both resolved and open.
+> Decisions locked during V0.2.0 implementation are marked with ✅ LOCKED.
+> Open questions that still need resolution are marked with ❓ OPEN.
 >
-> **How to use this:** Read through, make your picks (or note questions), and
-> we'll lock them into a DECISIONS_LOG.md before writing code.
+> **Last updated:** After Opus architectural review (post-V0.2.0).
 
 ---
 
 ## 1. Technology Stack
 
-### 1.1 Database Engine
+### 1.1 Database Engine ✅ LOCKED → SQLite
 
-The data model has 12 object types, relational links (goal → task, source → 
-extracted objects), evidence arrays, and freeform text fields. The choice here
-cascades into schema design, query patterns, and hosting.
+**Decision:** SQLite with file-based storage (`memorychain.db`).
 
-| Option | Strengths | Weaknesses |
-|--------|-----------|------------|
-| **PostgreSQL** | Relational integrity, JSONB for flexible fields, full-text search built in, mature ecosystem | Requires schema migrations, self-hosted or managed (Supabase, Neon, RDS) |
-| **SQLite** | Zero-config, file-based, great for single-user MVP, no server needed | No concurrent writes, limited full-text search, harder to scale later |
-| **MongoDB** | Schema flexibility, natural fit for nested objects like DailyCheckin | Weaker referential integrity, joins are expensive, easy to get sloppy |
-| **Hybrid (SQLite now → Postgres later)** | Fast start, upgrade when needed | Migration cost; risk of SQLite-specific patterns leaking in |
+**Rationale:** Single-user MVP, zero-config, no server dependency. FTS5 will
+be added for full-text search (Phase 0). Migration to PostgreSQL deferred to
+V1.1+ if multi-user is needed.
 
-**Suggested default:** PostgreSQL — the object model is inherently relational
-(source → journal → insight → heuristic chains), evidence arrays map well to
-array columns or junction tables, and full-text search over SourceDocument.raw_text
-is a V1 requirement.
-
-**Questions to answer:**
-- Is this single-user for the foreseeable future, or is multi-user on the horizon?
-- Do you want a local-first app (favors SQLite) or a hosted service (favors Postgres)?
-- Any existing database experience or preferences?
+**Remaining concern:** Add FTS5 virtual tables before data volume grows. Current
+`LIKE '%query%'` search won't scale past a few hundred entries.
 
 ---
 
-### 1.2 Backend Language & Framework
+### 1.2 Backend Language & Framework ✅ LOCKED → Python + FastAPI
 
-| Option | Strengths | Weaknesses |
-|--------|-----------|------------|
-| **Python + FastAPI** | Best LLM library ecosystem (LangChain, LlamaIndex, OpenAI SDK), fast prototyping, async support, Pydantic for validation | Slower runtime, type safety is optional |
-| **TypeScript + Node (Express/Fastify/Hono)** | Full-stack consistency if frontend is TS, strong typing, good ecosystem | LLM libraries less mature than Python, more boilerplate |
-| **C# + ASP.NET** | Strong typing, performance, enterprise patterns | Heavier framework, smaller LLM ecosystem |
-| **Go** | Fast, simple, great for APIs | Weak LLM ecosystem, verbose for complex domain models |
+**Decision:** Python 3.11+ with FastAPI, Pydantic for schemas, uvicorn for serving.
 
-**Suggested default:** Python + FastAPI — the LLM integration is central to
-MemoryChain (extraction, summarization, pattern detection), and Python has the
-strongest ecosystem for that. Pydantic models map directly to your schema objects.
+**Rationale:** Best LLM library ecosystem (OpenAI SDK), Pydantic models map
+directly to the 12 V1 object types, fast prototyping with async support.
 
-**Questions to answer:**
-- What languages are you most comfortable in?
-- Is there a deployment target (Docker, serverless, bare metal)?
-- How important is type safety vs. speed of iteration?
+**Implementation status:** Fully operational with 16 passing tests.
 
 ---
 

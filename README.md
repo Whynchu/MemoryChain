@@ -41,11 +41,14 @@ MemoryChain separates *observations* (what happened) from *interpretations* (pat
 
 ## What It Is Not Yet ⚠️
 
+- **Missing V1 objects** — Activity, MetricObservation, Protocol, ProtocolExecution, Insight, and Heuristic have no tables/CRUD yet
+- **No `provenance` column** — Schema rules require it on all objects; not yet implemented
 - **LLM extraction not yet wired** — Config exists, but deterministic parsing is still the default
 - **No insight/heuristic engine** — Schemas exist, promotion logic doesn't
 - **No frontend** — API-first; use curl, Postman, or CLI
-- **No semantic search** — Keyword search only (no embeddings)
+- **No semantic search** — Keyword search only (no FTS5 or embeddings)
 - **No multi-user** — Single-user with static API key
+- **Transaction gaps** — Some multi-step writes use separate commits (audit + entity)
 
 ---
 
@@ -53,13 +56,14 @@ MemoryChain separates *observations* (what happened) from *interpretations* (pat
 
 **See [NEXT_STEPS.md](./NEXT_STEPS.md) for the full prioritized roadmap.**
 
-**Immediate priorities (this week):**
-1. **LLM-powered extraction** — Wire up structured extraction for real daily logs
-2. **Ingest real data** — Test against WHYNN historical logs
-3. **Insight/Heuristic engine** — Implement promotion algorithm
-4. **Build CLI or web frontend** — Make it actually usable
+**Immediate priorities:**
+1. **Phase 0: Foundation fixes** — Add missing tables, provenance, fix transactions, FTS5, unify extraction service
+2. **Phase 1: Real data extraction** — Build WHYNN log parser, field extractors, LLM for freeform, bulk import
+3. **Phase 2: Insight engine** — Sleep-mood detector, promotion/rejection flow
+4. **Phase 3: Weekly review + audit** — LLM polish, full audit coverage
+5. **Phase 4: CLI + daily workflow** — Make it actually usable
 
-**Estimated to MVP:** 8 weeks
+**Estimated to MVP:** ~8–10 weeks
 
 ## Repo Layout
 
