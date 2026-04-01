@@ -2,7 +2,7 @@
 
 **Your personal operator. A memory and execution backend that learns your patterns, runs your protocols, and keeps you honest.**
 
-Think of it like a NetNavi — a digital partner that lives alongside you, knows your habits, tracks your metrics, and runs your daily briefings. Not a chatbot. Not a dashboard. A personal system that understands *you* through conversation and structured check-ins, and turns that understanding into queryable behavioral data.
+A digital partner that lives alongside you, knows your habits, tracks your metrics, and runs your daily briefings. Not a chatbot. Not a dashboard. A personal system that understands *you* through conversation and structured check-ins, and turns that understanding into queryable behavioral data.
 
 MemoryChain separates *observations* (what happened) from *interpretations* (patterns) from *operational rules* (what to do about it). Casual conversation never accidentally becomes an execution constraint — but real patterns get surfaced and tracked.
 
