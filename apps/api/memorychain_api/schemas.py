@@ -22,8 +22,16 @@ GoalStatus = Literal["active", "paused", "completed", "dropped"]
 TaskStatus = Literal["todo", "in_progress", "done", "canceled"]
 Priority = Literal["low", "medium", "high"]
 InsightStatus = Literal["candidate", "active", "rejected", "archived"]
+HeuristicSourceType = Literal["validated_pattern", "user_defined", "correction_history"]
+ProtocolStatus = Literal["active", "archived", "draft"]
+CompletionStatus = Literal["completed", "partial", "skipped"]
+ValueType = Literal["number", "string", "boolean"]
+Provenance = Literal["user", "import", "system_extracted", "system_inferred", "system_aggregated"]
 MessageRole = Literal["user", "assistant", "system"]
-SearchObjectType = Literal["source_document", "journal_entry", "daily_checkin", "task", "goal"]
+SearchObjectType = Literal[
+    "source_document", "journal_entry", "daily_checkin", "task", "goal",
+    "activity", "metric_observation",
+]
 PromptCycleStatus = Literal["pending", "viewed_no_response", "responded", "missed"]
 EngagementEventType = Literal[
     "prompt_scheduled",
@@ -114,6 +122,191 @@ class DailyCheckin(BaseModel):
     pain_notes: str | None = None
     hydration_start: float | None = None
     hydration_unit: str | None = None
+    provenance: Provenance = "user"
+
+
+# --- Activity ---
+
+class ActivityCreate(BaseModel):
+    user_id: str
+    source_document_id: str | None = None
+    effective_at: datetime
+    activity_type: ActivityType
+    started_at: datetime | None = None
+    ended_at: datetime | None = None
+    title: str = Field(min_length=1)
+    description: str | None = None
+    notes: str | None = None
+    metadata: dict = Field(default_factory=dict)
+    provenance: Provenance = "user"
+
+
+class Activity(BaseModel):
+    id: str
+    user_id: str
+    source_document_id: str | None = None
+    created_at: datetime
+    effective_at: datetime
+    activity_type: ActivityType
+    started_at: datetime | None = None
+    ended_at: datetime | None = None
+    title: str
+    description: str | None = None
+    notes: str | None = None
+    metadata: dict = Field(default_factory=dict)
+    provenance: Provenance = "user"
+
+
+# --- MetricObservation ---
+
+class MetricObservationCreate(BaseModel):
+    user_id: str
+    source_document_id: str | None = None
+    effective_at: datetime
+    metric_type: str = Field(min_length=1)
+    value: str = Field(min_length=1)
+    unit: str | None = None
+    value_type: ValueType = "number"
+    notes: str | None = None
+    provenance: Provenance = "user"
+
+
+class MetricObservation(BaseModel):
+    id: str
+    user_id: str
+    source_document_id: str | None = None
+    created_at: datetime
+    effective_at: datetime
+    metric_type: str
+    value: str
+    unit: str | None = None
+    value_type: ValueType = "number"
+    notes: str | None = None
+    provenance: Provenance = "user"
+
+
+# --- Protocol ---
+
+class ProtocolCreate(BaseModel):
+    user_id: str
+    name: str = Field(min_length=1)
+    category: str | None = None
+    description: str | None = None
+    steps: list[str] = Field(default_factory=list)
+    target_metrics: list[str] = Field(default_factory=list)
+    status: ProtocolStatus = "active"
+
+
+class ProtocolUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1)
+    category: str | None = None
+    description: str | None = None
+    steps: list[str] | None = None
+    target_metrics: list[str] | None = None
+    status: ProtocolStatus | None = None
+
+
+class Protocol(BaseModel):
+    id: str
+    user_id: str
+    created_at: datetime
+    updated_at: datetime
+    name: str
+    category: str | None = None
+    description: str | None = None
+    steps: list[str] = Field(default_factory=list)
+    target_metrics: list[str] = Field(default_factory=list)
+    status: ProtocolStatus = "active"
+    provenance: Provenance = "user"
+
+
+# --- ProtocolExecution ---
+
+class ProtocolExecutionCreate(BaseModel):
+    user_id: str
+    protocol_id: str
+    source_document_id: str | None = None
+    executed_at: datetime
+    completion_status: CompletionStatus = "completed"
+    notes: str | None = None
+    provenance: Provenance = "user"
+
+
+class ProtocolExecution(BaseModel):
+    id: str
+    user_id: str
+    protocol_id: str
+    source_document_id: str | None = None
+    created_at: datetime
+    executed_at: datetime
+    completion_status: CompletionStatus = "completed"
+    notes: str | None = None
+    provenance: Provenance = "user"
+
+
+# --- Insight ---
+
+class InsightCreate(BaseModel):
+    user_id: str
+    title: str = Field(min_length=1)
+    summary: str = Field(min_length=1)
+    confidence: float | None = None
+    status: InsightStatus = "candidate"
+    evidence_ids: list[str] = Field(default_factory=list)
+    counterevidence_ids: list[str] = Field(default_factory=list)
+    time_window_start: date | None = None
+    time_window_end: date | None = None
+
+
+class InsightUpdate(BaseModel):
+    title: str | None = Field(default=None, min_length=1)
+    summary: str | None = None
+    confidence: float | None = None
+    status: InsightStatus | None = None
+
+
+class Insight(BaseModel):
+    id: str
+    user_id: str
+    created_at: datetime
+    title: str
+    summary: str
+    confidence: float | None = None
+    status: InsightStatus = "candidate"
+    evidence_ids: list[str] = Field(default_factory=list)
+    counterevidence_ids: list[str] = Field(default_factory=list)
+    time_window_start: date | None = None
+    time_window_end: date | None = None
+    provenance: Provenance = "system_inferred"
+
+
+# --- Heuristic ---
+
+class HeuristicCreate(BaseModel):
+    user_id: str
+    rule: str = Field(min_length=1)
+    source_type: HeuristicSourceType = "validated_pattern"
+    confidence: float | None = None
+    evidence_ids: list[str] = Field(default_factory=list)
+    counterevidence_ids: list[str] = Field(default_factory=list)
+    validation_notes: str | None = None
+    insight_id: str | None = None
+
+
+class Heuristic(BaseModel):
+    id: str
+    user_id: str
+    created_at: datetime
+    updated_at: datetime
+    rule: str
+    source_type: HeuristicSourceType = "validated_pattern"
+    confidence: float | None = None
+    active: bool = True
+    evidence_ids: list[str] = Field(default_factory=list)
+    counterevidence_ids: list[str] = Field(default_factory=list)
+    validation_notes: str | None = None
+    insight_id: str | None = None
+    provenance: Provenance = "system_inferred"
 
 
 class IngestJournalEntry(BaseModel):
@@ -322,6 +515,8 @@ class ExtractionSummary(BaseModel):
     checkin_id: str | None = None
     task_ids: list[str] = Field(default_factory=list)
     goal_ids: list[str] = Field(default_factory=list)
+    activity_ids: list[str] = Field(default_factory=list)
+    metric_ids: list[str] = Field(default_factory=list)
 
 
 class ChatResponse(BaseModel):

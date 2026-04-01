@@ -7,19 +7,33 @@ import sqlite3
 import uuid
 
 from ..schemas import (
+    Activity,
+    ActivityCreate,
+    AuditLogEntry,
     Conversation,
     ConversationMessage,
     DailyCheckin,
     DailyCheckinCreate,
-    AuditLogEntry,
     EngagementEvent,
     EngagementSummary,
     Goal,
     GoalCreate,
     GoalUpdate,
+    Heuristic,
+    HeuristicCreate,
+    Insight,
+    InsightCreate,
+    InsightUpdate,
     JournalEntry,
     JournalEntryCreate,
+    MetricObservation,
+    MetricObservationCreate,
     PromptCycle,
+    Protocol,
+    ProtocolCreate,
+    ProtocolExecution,
+    ProtocolExecutionCreate,
+    ProtocolUpdate,
     SearchResult,
     SourceDocument,
     SourceDocumentCreate,
@@ -90,6 +104,7 @@ class Repository:
                 content_hash,
             ),
         )
+        self._index_for_search(object_type="source_document", object_id=source_id, user_id=payload.user_id, content=f"{payload.title or ''} {payload.raw_text}", effective_at=payload.effective_at.isoformat())
         self.conn.commit()
         return self.get_source_by_hash(content_hash)  # type: ignore[return-value]
 
@@ -115,6 +130,7 @@ class Repository:
                 _to_json(payload.tags),
             ),
         )
+        self._index_for_search(object_type="journal_entry", object_id=entry_id, user_id=payload.user_id, content=f"{payload.title or ''} {payload.text}", effective_at=payload.effective_at.isoformat())
         self.conn.commit()
         row = self.conn.execute(
             "SELECT * FROM journal_entries WHERE id = ?", (entry_id,)
@@ -159,6 +175,7 @@ class Repository:
                 payload.hydration_unit,
             ),
         )
+        self._index_for_search(object_type="daily_checkin", object_id=checkin_id, user_id=payload.user_id, content=f"{payload.immediate_thoughts or ''} {payload.pain_notes or ''}", effective_at=payload.effective_at.isoformat())
         self.conn.commit()
         row = self.conn.execute(
             "SELECT * FROM daily_checkins WHERE id = ?", (checkin_id,)
@@ -194,6 +211,7 @@ class Repository:
                 _date_to_iso(payload.target_date),
             ),
         )
+        self._index_for_search(object_type="goal", object_id=goal_id, user_id=payload.user_id, content=f"{payload.title} {payload.description or ''}", effective_at=now)
         self.conn.commit()
         row = self.conn.execute("SELECT * FROM goals WHERE id = ?", (goal_id,)).fetchone()
         return self._row_to_goal(row)
@@ -261,7 +279,6 @@ class Repository:
             f"UPDATE goals SET {', '.join(fields)} WHERE id = ? AND user_id = ?",
             tuple(values),
         )
-        self.conn.commit()
         if cursor.rowcount == 0:
             return None
 
@@ -308,6 +325,7 @@ class Repository:
                 completed_at,
             ),
         )
+        self._index_for_search(object_type="task", object_id=task_id, user_id=payload.user_id, content=f"{payload.title} {payload.description or ''}", effective_at=now)
         self.conn.commit()
         row = self.conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
         return self._row_to_task(row)
@@ -384,7 +402,6 @@ class Repository:
             f"UPDATE tasks SET {', '.join(fields)} WHERE id = ? AND user_id = ?",
             tuple(values),
         )
-        self.conn.commit()
         if cursor.rowcount == 0:
             return None
 
@@ -931,6 +948,385 @@ class Repository:
             event_at=event_at,
             metadata=metadata,
         )
+
+    def _index_for_search(
+        self,
+        *,
+        object_type: str,
+        object_id: str,
+        user_id: str,
+        content: str,
+        effective_at: str,
+    ) -> None:
+        """Insert a row into the FTS5 search index."""
+        self.conn.execute(
+            "INSERT INTO search_index (object_type, object_id, user_id, content, effective_at) VALUES (?, ?, ?, ?, ?)",
+            (object_type, object_id, user_id, content, effective_at),
+        )
+
+    def create_activity(self, payload: ActivityCreate) -> Activity:
+        now = _now_iso()
+        activity_id = _new_id("act")
+        self.conn.execute(
+            """
+            INSERT INTO activities (
+                id, user_id, source_document_id, created_at, effective_at,
+                activity_type, started_at, ended_at, title, description,
+                notes, metadata_json, provenance
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                activity_id,
+                payload.user_id,
+                payload.source_document_id,
+                now,
+                payload.effective_at.isoformat(),
+                payload.activity_type,
+                payload.started_at.isoformat() if payload.started_at else None,
+                payload.ended_at.isoformat() if payload.ended_at else None,
+                payload.title,
+                payload.description,
+                payload.notes,
+                _to_json(payload.metadata),
+                payload.provenance,
+            ),
+        )
+        self._index_for_search(
+            object_type="activity",
+            object_id=activity_id,
+            user_id=payload.user_id,
+            content=f"{payload.title} {payload.description or ''} {payload.notes or ''}",
+            effective_at=payload.effective_at.isoformat(),
+        )
+        self.conn.commit()
+        row = self.conn.execute("SELECT * FROM activities WHERE id = ?", (activity_id,)).fetchone()
+        return self._row_to_activity(row)
+
+    def list_activities(self, user_id: str, limit: int = 100, offset: int = 0) -> list[Activity]:
+        rows = self.conn.execute(
+            "SELECT * FROM activities WHERE user_id = ? ORDER BY effective_at DESC LIMIT ? OFFSET ?",
+            (user_id, limit, offset),
+        ).fetchall()
+        return [self._row_to_activity(row) for row in rows]
+
+    def get_activity(self, *, activity_id: str, user_id: str) -> Activity | None:
+        row = self.conn.execute(
+            "SELECT * FROM activities WHERE id = ? AND user_id = ?",
+            (activity_id, user_id),
+        ).fetchone()
+        return self._row_to_activity(row) if row else None
+
+    def create_metric_observation(self, payload: MetricObservationCreate) -> MetricObservation:
+        now = _now_iso()
+        metric_id = _new_id("mo")
+        self.conn.execute(
+            """
+            INSERT INTO metric_observations (
+                id, user_id, source_document_id, created_at, effective_at,
+                metric_type, value, unit, value_type, notes, provenance
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                metric_id,
+                payload.user_id,
+                payload.source_document_id,
+                now,
+                payload.effective_at.isoformat(),
+                payload.metric_type,
+                payload.value,
+                payload.unit,
+                payload.value_type,
+                payload.notes,
+                payload.provenance,
+            ),
+        )
+        self._index_for_search(
+            object_type="metric_observation",
+            object_id=metric_id,
+            user_id=payload.user_id,
+            content=f"{payload.metric_type}: {payload.value} {payload.unit or ''} {payload.notes or ''}",
+            effective_at=payload.effective_at.isoformat(),
+        )
+        self.conn.commit()
+        row = self.conn.execute("SELECT * FROM metric_observations WHERE id = ?", (metric_id,)).fetchone()
+        return self._row_to_metric_observation(row)
+
+    def list_metric_observations(self, user_id: str, limit: int = 100, offset: int = 0) -> list[MetricObservation]:
+        rows = self.conn.execute(
+            "SELECT * FROM metric_observations WHERE user_id = ? ORDER BY effective_at DESC LIMIT ? OFFSET ?",
+            (user_id, limit, offset),
+        ).fetchall()
+        return [self._row_to_metric_observation(row) for row in rows]
+
+    def get_metric_observation(self, *, metric_id: str, user_id: str) -> MetricObservation | None:
+        row = self.conn.execute(
+            "SELECT * FROM metric_observations WHERE id = ? AND user_id = ?",
+            (metric_id, user_id),
+        ).fetchone()
+        return self._row_to_metric_observation(row) if row else None
+
+    def create_protocol(self, payload: ProtocolCreate) -> Protocol:
+        now = _now_iso()
+        protocol_id = _new_id("proto")
+        self.conn.execute(
+            """
+            INSERT INTO protocols (
+                id, user_id, created_at, updated_at, name, category,
+                description, steps_json, target_metrics_json, status
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                protocol_id,
+                payload.user_id,
+                now,
+                now,
+                payload.name,
+                payload.category,
+                payload.description,
+                _to_json(payload.steps),
+                _to_json(payload.target_metrics),
+                payload.status,
+            ),
+        )
+        self.conn.commit()
+        row = self.conn.execute("SELECT * FROM protocols WHERE id = ?", (protocol_id,)).fetchone()
+        return self._row_to_protocol(row)
+
+    def list_protocols(self, user_id: str, limit: int = 100, offset: int = 0) -> list[Protocol]:
+        rows = self.conn.execute(
+            "SELECT * FROM protocols WHERE user_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?",
+            (user_id, limit, offset),
+        ).fetchall()
+        return [self._row_to_protocol(row) for row in rows]
+
+    def get_protocol(self, *, protocol_id: str, user_id: str) -> Protocol | None:
+        row = self.conn.execute(
+            "SELECT * FROM protocols WHERE id = ? AND user_id = ?",
+            (protocol_id, user_id),
+        ).fetchone()
+        return self._row_to_protocol(row) if row else None
+
+    def update_protocol(self, *, protocol_id: str, user_id: str, payload: ProtocolUpdate) -> Protocol | None:
+        updates = payload.model_dump(exclude_unset=True)
+        if not updates:
+            return self.get_protocol(protocol_id=protocol_id, user_id=user_id)
+
+        row = self.conn.execute(
+            "SELECT * FROM protocols WHERE id = ? AND user_id = ?",
+            (protocol_id, user_id),
+        ).fetchone()
+        if not row:
+            return None
+
+        now = _now_iso()
+        fields: list[str] = []
+        values: list[object] = []
+        for key in ("name", "category", "description", "status"):
+            if key in updates:
+                fields.append(f"{key} = ?")
+                values.append(updates[key])
+        if "steps" in updates:
+            fields.append("steps_json = ?")
+            values.append(_to_json(updates["steps"]))
+        if "target_metrics" in updates:
+            fields.append("target_metrics_json = ?")
+            values.append(_to_json(updates["target_metrics"]))
+        fields.append("updated_at = ?")
+        values.append(now)
+        values.extend([protocol_id, user_id])
+        self.conn.execute(
+            f"UPDATE protocols SET {', '.join(fields)} WHERE id = ? AND user_id = ?",
+            tuple(values),
+        )
+        self.conn.commit()
+        return self.get_protocol(protocol_id=protocol_id, user_id=user_id)
+
+    def create_protocol_execution(self, payload: ProtocolExecutionCreate) -> ProtocolExecution:
+        now = _now_iso()
+        exec_id = _new_id("pexec")
+        self.conn.execute(
+            """
+            INSERT INTO protocol_executions (
+                id, user_id, protocol_id, source_document_id, created_at,
+                executed_at, completion_status, notes, provenance
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                exec_id,
+                payload.user_id,
+                payload.protocol_id,
+                payload.source_document_id,
+                now,
+                payload.executed_at.isoformat(),
+                payload.completion_status,
+                payload.notes,
+                payload.provenance,
+            ),
+        )
+        self._index_for_search(
+            object_type="protocol_execution",
+            object_id=exec_id,
+            user_id=payload.user_id,
+            content=f"{payload.completion_status} {payload.notes or ''}",
+            effective_at=payload.executed_at.isoformat(),
+        )
+        self.conn.commit()
+        row = self.conn.execute("SELECT * FROM protocol_executions WHERE id = ?", (exec_id,)).fetchone()
+        return self._row_to_protocol_execution(row)
+
+    def list_protocol_executions(self, user_id: str, protocol_id: str | None = None, limit: int = 100, offset: int = 0) -> list[ProtocolExecution]:
+        if protocol_id:
+            rows = self.conn.execute(
+                "SELECT * FROM protocol_executions WHERE user_id = ? AND protocol_id = ? ORDER BY executed_at DESC LIMIT ? OFFSET ?",
+                (user_id, protocol_id, limit, offset),
+            ).fetchall()
+        else:
+            rows = self.conn.execute(
+                "SELECT * FROM protocol_executions WHERE user_id = ? ORDER BY executed_at DESC LIMIT ? OFFSET ?",
+                (user_id, limit, offset),
+            ).fetchall()
+        return [self._row_to_protocol_execution(row) for row in rows]
+
+    def create_insight(self, payload: InsightCreate) -> Insight:
+        now = _now_iso()
+        insight_id = _new_id("ins")
+        self.conn.execute(
+            """
+            INSERT INTO insights (
+                id, user_id, created_at, title, summary, confidence, status,
+                evidence_ids_json, counterevidence_ids_json,
+                time_window_start, time_window_end
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                insight_id,
+                payload.user_id,
+                now,
+                payload.title,
+                payload.summary,
+                payload.confidence,
+                payload.status,
+                _to_json(payload.evidence_ids),
+                _to_json(payload.counterevidence_ids),
+                _date_to_iso(payload.time_window_start),
+                _date_to_iso(payload.time_window_end),
+            ),
+        )
+        self._index_for_search(
+            object_type="insight",
+            object_id=insight_id,
+            user_id=payload.user_id,
+            content=f"{payload.title} {payload.summary}",
+            effective_at=now,
+        )
+        self.conn.commit()
+        row = self.conn.execute("SELECT * FROM insights WHERE id = ?", (insight_id,)).fetchone()
+        return self._row_to_insight(row)
+
+    def list_insights(self, user_id: str, status: str | None = None, limit: int = 100, offset: int = 0) -> list[Insight]:
+        sql = "SELECT * FROM insights WHERE user_id = ?"
+        params: list[object] = [user_id]
+        if status:
+            sql += " AND status = ?"
+            params.append(status)
+        sql += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
+        params.extend([limit, offset])
+        rows = self.conn.execute(sql, tuple(params)).fetchall()
+        return [self._row_to_insight(row) for row in rows]
+
+    def get_insight(self, *, insight_id: str, user_id: str) -> Insight | None:
+        row = self.conn.execute(
+            "SELECT * FROM insights WHERE id = ? AND user_id = ?",
+            (insight_id, user_id),
+        ).fetchone()
+        return self._row_to_insight(row) if row else None
+
+    def update_insight(self, *, insight_id: str, user_id: str, payload: InsightUpdate) -> Insight | None:
+        updates = payload.model_dump(exclude_unset=True)
+        if not updates:
+            return self.get_insight(insight_id=insight_id, user_id=user_id)
+
+        existing = self.get_insight(insight_id=insight_id, user_id=user_id)
+        if not existing:
+            return None
+
+        fields: list[str] = []
+        values: list[object] = []
+        for key in ("title", "summary", "confidence", "status"):
+            if key in updates:
+                fields.append(f"{key} = ?")
+                values.append(updates[key])
+        values.extend([insight_id, user_id])
+        self.conn.execute(
+            f"UPDATE insights SET {', '.join(fields)} WHERE id = ? AND user_id = ?",
+            tuple(values),
+        )
+        self._record_audit_log(
+            user_id=user_id,
+            entity_type="insight",
+            entity_id=insight_id,
+            action="update",
+            before=existing.model_dump(mode="json"),
+            after={**existing.model_dump(mode="json"), **updates},
+            changed_fields=sorted(list(updates.keys())),
+        )
+        self.conn.commit()
+        return self.get_insight(insight_id=insight_id, user_id=user_id)
+
+    def create_heuristic(self, payload: HeuristicCreate) -> Heuristic:
+        now = _now_iso()
+        heuristic_id = _new_id("heur")
+        self.conn.execute(
+            """
+            INSERT INTO heuristics (
+                id, user_id, created_at, updated_at, rule, source_type,
+                confidence, active, evidence_ids_json, counterevidence_ids_json,
+                validation_notes, insight_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                heuristic_id,
+                payload.user_id,
+                now,
+                now,
+                payload.rule,
+                payload.source_type,
+                payload.confidence,
+                1,
+                _to_json(payload.evidence_ids),
+                _to_json(payload.counterevidence_ids),
+                payload.validation_notes,
+                payload.insight_id,
+            ),
+        )
+        self._index_for_search(
+            object_type="heuristic",
+            object_id=heuristic_id,
+            user_id=payload.user_id,
+            content=f"{payload.rule} {payload.validation_notes or ''}",
+            effective_at=now,
+        )
+        self.conn.commit()
+        row = self.conn.execute("SELECT * FROM heuristics WHERE id = ?", (heuristic_id,)).fetchone()
+        return self._row_to_heuristic(row)
+
+    def list_heuristics(self, user_id: str, active_only: bool = False, limit: int = 100, offset: int = 0) -> list[Heuristic]:
+        sql = "SELECT * FROM heuristics WHERE user_id = ?"
+        params: list[object] = [user_id]
+        if active_only:
+            sql += " AND active = 1"
+        sql += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
+        params.extend([limit, offset])
+        rows = self.conn.execute(sql, tuple(params)).fetchall()
+        return [self._row_to_heuristic(row) for row in rows]
+
+    def get_heuristic(self, *, heuristic_id: str, user_id: str) -> Heuristic | None:
+        row = self.conn.execute(
+            "SELECT * FROM heuristics WHERE id = ? AND user_id = ?",
+            (heuristic_id, user_id),
+        ).fetchone()
+        return self._row_to_heuristic(row) if row else None
+
     def search(
         self,
         *,
@@ -942,7 +1338,10 @@ class Repository:
         tag: str | None = None,
         limit: int = 50,
     ) -> list[SearchResult]:
-        selected = set(object_types or ["source_document", "journal_entry", "daily_checkin", "task", "goal"])
+        selected = set(object_types or [
+            "source_document", "journal_entry", "daily_checkin", "task", "goal",
+            "activity", "metric_observation",
+        ])
         normalized_query = query.strip().lower() if query else None
         results: list[SearchResult] = []
 
@@ -1134,6 +1533,80 @@ class Repository:
                         title=row["title"],
                         snippet=snippet[:220],
                         source_document_id=None,
+                    )
+                )
+
+        if "activity" in selected:
+            sql = """
+                SELECT id, user_id, source_document_id, effective_at, title, description, activity_type
+                FROM activities
+                WHERE user_id = ?
+            """
+            params = [user_id]
+            if date_from:
+                sql += " AND date(effective_at) >= ?"
+                params.append(date_from.isoformat())
+            if date_to:
+                sql += " AND date(effective_at) <= ?"
+                params.append(date_to.isoformat())
+            if normalized_query:
+                sql += " AND (lower(title) LIKE ? OR lower(COALESCE(description, '')) LIKE ? OR lower(COALESCE(activity_type, '')) LIKE ?)"
+                pattern = f"%{normalized_query}%"
+                params.extend([pattern, pattern, pattern])
+            sql += " ORDER BY effective_at DESC LIMIT ?"
+            params.append(limit)
+            rows = self.conn.execute(sql, tuple(params)).fetchall()
+            for row in rows:
+                snippet = f"[{row['activity_type']}] {row['title']}"
+                if row["description"]:
+                    snippet += f" - {row['description']}"
+                results.append(
+                    SearchResult(
+                        object_type="activity",
+                        object_id=row["id"],
+                        user_id=row["user_id"],
+                        effective_at=datetime.fromisoformat(row["effective_at"]),
+                        title=row["title"],
+                        snippet=snippet[:220],
+                        source_document_id=row["source_document_id"],
+                    )
+                )
+
+        if "metric_observation" in selected:
+            sql = """
+                SELECT id, user_id, source_document_id, effective_at, metric_type, value, unit, notes
+                FROM metric_observations
+                WHERE user_id = ?
+            """
+            params = [user_id]
+            if date_from:
+                sql += " AND date(effective_at) >= ?"
+                params.append(date_from.isoformat())
+            if date_to:
+                sql += " AND date(effective_at) <= ?"
+                params.append(date_to.isoformat())
+            if normalized_query:
+                sql += " AND (lower(metric_type) LIKE ? OR lower(COALESCE(notes, '')) LIKE ?)"
+                pattern = f"%{normalized_query}%"
+                params.extend([pattern, pattern])
+            sql += " ORDER BY effective_at DESC LIMIT ?"
+            params.append(limit)
+            rows = self.conn.execute(sql, tuple(params)).fetchall()
+            for row in rows:
+                snippet = f"{row['metric_type']}: {row['value']}"
+                if row["unit"]:
+                    snippet += f" {row['unit']}"
+                if row["notes"]:
+                    snippet += f" ({row['notes']})"
+                results.append(
+                    SearchResult(
+                        object_type="metric_observation",
+                        object_id=row["id"],
+                        user_id=row["user_id"],
+                        effective_at=datetime.fromisoformat(row["effective_at"]),
+                        title=row["metric_type"],
+                        snippet=snippet[:220],
+                        source_document_id=row["source_document_id"],
                     )
                 )
 
@@ -1506,8 +1979,98 @@ class Repository:
             created_at=datetime.fromisoformat(row["created_at"]),
         )
 
+    def _row_to_activity(self, row: sqlite3.Row) -> Activity:
+        return Activity(
+            id=row["id"],
+            user_id=row["user_id"],
+            source_document_id=row["source_document_id"],
+            created_at=datetime.fromisoformat(row["created_at"]),
+            effective_at=datetime.fromisoformat(row["effective_at"]),
+            activity_type=row["activity_type"],
+            started_at=datetime.fromisoformat(row["started_at"]) if row["started_at"] else None,
+            ended_at=datetime.fromisoformat(row["ended_at"]) if row["ended_at"] else None,
+            title=row["title"],
+            description=row["description"],
+            notes=row["notes"],
+            metadata=json.loads(row["metadata_json"]),
+            provenance=row["provenance"],
+        )
 
+    def _row_to_metric_observation(self, row: sqlite3.Row) -> MetricObservation:
+        return MetricObservation(
+            id=row["id"],
+            user_id=row["user_id"],
+            source_document_id=row["source_document_id"],
+            created_at=datetime.fromisoformat(row["created_at"]),
+            effective_at=datetime.fromisoformat(row["effective_at"]),
+            metric_type=row["metric_type"],
+            value=row["value"],
+            unit=row["unit"],
+            value_type=row["value_type"],
+            notes=row["notes"],
+            provenance=row["provenance"],
+        )
 
+    def _row_to_protocol(self, row: sqlite3.Row) -> Protocol:
+        return Protocol(
+            id=row["id"],
+            user_id=row["user_id"],
+            created_at=datetime.fromisoformat(row["created_at"]),
+            updated_at=datetime.fromisoformat(row["updated_at"]),
+            name=row["name"],
+            category=row["category"],
+            description=row["description"],
+            steps=json.loads(row["steps_json"]),
+            target_metrics=json.loads(row["target_metrics_json"]),
+            status=row["status"],
+            provenance=row["provenance"],
+        )
+
+    def _row_to_protocol_execution(self, row: sqlite3.Row) -> ProtocolExecution:
+        return ProtocolExecution(
+            id=row["id"],
+            user_id=row["user_id"],
+            protocol_id=row["protocol_id"],
+            source_document_id=row["source_document_id"],
+            created_at=datetime.fromisoformat(row["created_at"]),
+            executed_at=datetime.fromisoformat(row["executed_at"]),
+            completion_status=row["completion_status"],
+            notes=row["notes"],
+            provenance=row["provenance"],
+        )
+
+    def _row_to_insight(self, row: sqlite3.Row) -> Insight:
+        return Insight(
+            id=row["id"],
+            user_id=row["user_id"],
+            created_at=datetime.fromisoformat(row["created_at"]),
+            title=row["title"],
+            summary=row["summary"],
+            confidence=row["confidence"],
+            status=row["status"],
+            evidence_ids=json.loads(row["evidence_ids_json"]),
+            counterevidence_ids=json.loads(row["counterevidence_ids_json"]),
+            time_window_start=date.fromisoformat(row["time_window_start"]) if row["time_window_start"] else None,
+            time_window_end=date.fromisoformat(row["time_window_end"]) if row["time_window_end"] else None,
+            provenance=row["provenance"],
+        )
+
+    def _row_to_heuristic(self, row: sqlite3.Row) -> Heuristic:
+        return Heuristic(
+            id=row["id"],
+            user_id=row["user_id"],
+            created_at=datetime.fromisoformat(row["created_at"]),
+            updated_at=datetime.fromisoformat(row["updated_at"]),
+            rule=row["rule"],
+            source_type=row["source_type"],
+            confidence=row["confidence"],
+            active=bool(row["active"]),
+            evidence_ids=json.loads(row["evidence_ids_json"]),
+            counterevidence_ids=json.loads(row["counterevidence_ids_json"]),
+            validation_notes=row["validation_notes"],
+            insight_id=row["insight_id"],
+            provenance=row["provenance"],
+        )
 
 
 

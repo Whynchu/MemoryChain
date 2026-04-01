@@ -1,70 +1,16 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-import re
 
 from ..schemas import (
     ChatRequest,
     ChatResponse,
-    DailyCheckinCreate,
     ExtractionSummary,
-    GoalCreate,
-    JournalEntryCreate,
     SourceDocumentCreate,
-    TaskCreate,
 )
 from ..storage.repository import Repository
+from .extraction import extract_objects, is_substantive
 from .llm import generate_chat_reply
-
-
-def _extract_goals(user_id: str, text: str) -> list[GoalCreate]:
-    goals: list[GoalCreate] = []
-    for match in re.finditer(r"(?is)\bgoal\s*:\s*(.+?)(?=(?:\b(?:todo|goal)\s*:)|$)", text):
-        title = match.group(1).strip().rstrip(".,;:! ")
-        if title:
-            goals.append(GoalCreate(user_id=user_id, title=title))
-    return goals
-
-
-def _extract_tasks(user_id: str, text: str) -> list[TaskCreate]:
-    tasks: list[TaskCreate] = []
-    for match in re.finditer(r"(?is)\btodo\s*:\s*(.+?)(?=(?:\b(?:todo|goal)\s*:)|$)", text):
-        title = match.group(1).strip().rstrip(".,;:! ")
-        if title:
-            tasks.append(TaskCreate(user_id=user_id, title=title))
-
-    for line in text.splitlines():
-        stripped = line.strip()
-        if stripped.startswith("- [ ]"):
-            title = stripped[5:].strip()
-            if title:
-                tasks.append(TaskCreate(user_id=user_id, title=title))
-    return tasks
-
-
-def _extract_checkin(
-    *,
-    user_id: str,
-    source_document_id: str,
-    text: str,
-    effective_at: datetime,
-) -> DailyCheckinCreate | None:
-    sleep_match = re.search(r"sleep\s+(\d+(?:\.\d+)?)\s*h", text, flags=re.IGNORECASE)
-    mood_match = re.search(r"mood\s+(\d{1,2})\s*/\s*10", text, flags=re.IGNORECASE)
-    energy_match = re.search(r"energy\s+(\d{1,2})\s*/\s*10", text, flags=re.IGNORECASE)
-
-    if not (sleep_match or mood_match or energy_match):
-        return None
-
-    return DailyCheckinCreate(
-        user_id=user_id,
-        source_document_id=source_document_id,
-        date=effective_at.date(),
-        effective_at=effective_at,
-        sleep_hours=float(sleep_match.group(1)) if sleep_match else None,
-        mood=int(mood_match.group(1)) if mood_match else None,
-        energy=int(energy_match.group(1)) if energy_match else None,
-    )
 
 
 def _build_memory_context(repo: Repository, user_id: str, conversation_id: str) -> list[str]:
@@ -115,28 +61,22 @@ def handle_chat(repo: Repository, payload: ChatRequest) -> ChatResponse:
         )
     )
 
-    journal = repo.create_journal_entry(
-        JournalEntryCreate(
-            user_id=payload.user_id,
-            source_document_id=source.id,
-            effective_at=now,
-            entry_type="journal",
-            title="Chat capture",
-            text=payload.message,
-            tags=["chat"],
-        )
-    )
-
-    checkin_payload = _extract_checkin(
-        user_id=payload.user_id,
+    # Use shared extraction service; only create journal for substantive messages
+    extraction = extract_objects(
+        raw_text=payload.message,
         source_document_id=source.id,
-        text=payload.message,
+        user_id=payload.user_id,
         effective_at=now,
+        create_journal=True,  # extraction service checks is_substantive internally
+        provenance="user",
     )
-    checkin = repo.create_checkin(checkin_payload) if checkin_payload else None
 
-    goals = [repo.create_goal(goal) for goal in _extract_goals(payload.user_id, payload.message)]
-    tasks = [repo.create_task(task) for task in _extract_tasks(payload.user_id, payload.message)]
+    journal = repo.create_journal_entry(extraction.journal_entry) if extraction.journal_entry else None
+    checkin = repo.create_checkin(extraction.checkin) if extraction.checkin else None
+    goals = [repo.create_goal(g) for g in extraction.goals]
+    tasks = [repo.create_task(t) for t in extraction.tasks]
+    activities = [repo.create_activity(a) for a in extraction.activities]
+    metrics = [repo.create_metric_observation(m) for m in extraction.metrics]
 
     repo.append_conversation_message(
         conversation_id=conversation.id,
@@ -169,10 +109,12 @@ def handle_chat(repo: Repository, payload: ChatRequest) -> ChatResponse:
         assistant_message_id=assistant_msg.id,
         extraction=ExtractionSummary(
             source_document_id=source.id,
-            journal_entry_id=journal.id,
+            journal_entry_id=journal.id if journal else None,
             checkin_id=checkin.id if checkin else None,
             task_ids=[task.id for task in tasks],
             goal_ids=[goal.id for goal in goals],
+            activity_ids=[a.id for a in activities],
+            metric_ids=[m.id for m in metrics],
         ),
         memory_context=memory_context,
     )

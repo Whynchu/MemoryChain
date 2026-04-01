@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 
 from .config import settings
-from .routers import audit_log, chat, checkins, engagement, goals, health, ingest, journal, prompt_cycles, prompts, reviews, search, tasks
+from .routers import activities, audit_log, chat, checkins, engagement, goals, health, heuristics, ingest, insights, journal, metrics, prompt_cycles, prompts, protocols, reviews, search, tasks
 from .storage.db import connect, initialize
 from .storage.repository import Repository
 
@@ -26,6 +26,11 @@ def create_app() -> FastAPI:
     app.include_router(prompt_cycles.router)
     app.include_router(engagement.router)
     app.include_router(audit_log.router)
+    app.include_router(activities.router)
+    app.include_router(metrics.router)
+    app.include_router(protocols.router)
+    app.include_router(insights.router)
+    app.include_router(heuristics.router)
     return app
 
 

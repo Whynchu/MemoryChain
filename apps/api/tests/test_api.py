@@ -79,7 +79,7 @@ def test_search_tag_and_date_filters() -> None:
         headers=AUTH,
         json={
             "user_id": user_id,
-            "message": "today log with tags via chat pipeline",
+            "message": "journal: today I did a detailed log with tags via the chat pipeline for testing purposes",
         },
     )
     assert chat_response.status_code == 200
