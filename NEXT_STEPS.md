@@ -1,253 +1,96 @@
 # MemoryChain — Roadmap to MVP
 
-Current state: **V0.2.0 — working FastAPI backend with basic chat extraction,
-continuity tracking, audit/rollback, and 16 passing tests.**
+Current state: **V0.3.0 — Phase 0 complete, Phase 1A (conversational questionnaires
++ hybrid extraction) complete. 19 passing tests.**
 
 This document defines the work remaining to reach a usable MVP. Phases are
-ordered by dependency — each unlocks the next. The ordering is informed by
-hands-on analysis of the real WHYNN daily logs in `users/Sam/logs/`.
+ordered by dependency — each unlocks the next.
 
 ---
 
-## Phase 0: Foundation Fixes (This Week)
+## Phase 0: Foundation Fixes ✅ COMPLETE
 
-**Why first?** The existing code has structural gaps that will compound if
-carried forward. Fix them while the codebase is small.
-
-### 0.1 Add Missing V1 Object Tables
-
-The design docs define 12 canonical V1 objects. The database only has 7.
-These four are missing and are required before extraction can target them:
-
-| Object | Table | Why It's Needed |
-|--------|-------|-----------------|
-| `Activity` | `activities` | Training sessions, meals, breathwork — the most common content in WHYNN logs |
-| `MetricObservation` | `metric_observations` | Strike counts, CO₂ holds, heart rate, body weight — the data the insight engine needs |
-| `Protocol` | `protocols` | Repeatable routines (AM stack, breathwork protocol, fight study) |
-| `ProtocolExecution` | `protocol_executions` | Evidence a protocol was followed — ties to adherence tracking |
-
-Also add empty tables for `insights` and `heuristics` — they already have
-Pydantic Literal types defined but no storage.
-
-**What to build:**
-- Add 6 new tables to `storage/db.py` (matching the schema docs field specs)
-- Add Pydantic models for Activity, MetricObservation, Protocol, ProtocolExecution, Insight, Heuristic
-- Add basic CRUD in repository + simple list/create endpoints
-- Add foreign keys: activity → source_document, metric → source_document, etc.
-
-### 0.2 Add `provenance` Column to All Tables
-
-The schema rules require every object to answer "who created this?"
-
-```
-provenance TEXT NOT NULL DEFAULT 'user'
--- values: 'user', 'import', 'system_extracted', 'system_inferred', 'system_aggregated'
-```
-
-Add this column to: source_documents, journal_entries, daily_checkins,
-activities, metric_observations, goals, tasks, protocol_executions,
-weekly_reviews, insights, heuristics.
-
-**Why now:** The insight engine needs to distinguish "user said mood was 4"
-from "system guessed mood was 4." Without provenance, you can't build
-trustworthy derived objects.
-
-### 0.3 Fix Transaction Safety
-
-Currently `update_goal` and `update_task` do two separate commits — one for
-the update, one for the audit log. If the process crashes between them, you
-get an unaudited change.
-
-**Fix:** Remove per-statement `conn.commit()` calls in multi-step operations.
-Wrap related writes in a single transaction. Commit once at the end.
-
-Pattern:
-```python
-def update_goal(self, ...):
-    # ... do UPDATE ...
-    # ... do INSERT audit_log ...
-    self.conn.commit()  # single commit at the end
-```
-
-Apply to: `update_goal`, `update_task`, `create_prompt_cycle`,
-`_transition_prompt_cycle`, and the ingestion service.
-
-### 0.4 Stop Creating Journal Entries for Every Chat Message
-
-`handle_chat` currently creates a `JournalEntry` for every message, including
-"ok", "thanks", and one-word replies. This pollutes the journal and will
-poison the insight engine with noise.
-
-**Fix:** Only create a JournalEntry when the message has substantive content.
-Simple heuristic for now: length > 40 characters, or contains a recognized
-extraction pattern (sleep, mood, todo:, goal:). Chat messages still get stored
-as `conversation_messages` — that table already exists.
-
-### 0.5 Add FTS5 for Search
-
-Current search does `LIKE '%query%'` full table scans. This won't scale past
-a few hundred entries.
-
-**Fix:** Add FTS5 virtual tables for searchable text:
-```sql
-CREATE VIRTUAL TABLE IF NOT EXISTS search_index USING fts5(
-    object_type, object_id, user_id, content, effective_at,
-    content='', contentless_delete=1
-);
-```
-
-Populate on insert. Query with `MATCH` instead of `LIKE`.
-
-### 0.6 Unify Extraction Into a Shared Service
-
-Currently chat and ingest have divergent extraction logic. Chat does inline
-regex. Ingest does passthrough. When LLM extraction arrives, both need it.
-
-**Fix:** Create `services/extraction.py` with a single `extract_objects()`
-function. Both the chat handler and the ingest handler call it. This is the
-function that will later gain LLM capabilities.
-
-```python
-def extract_objects(
-    raw_text: str,
-    source_document_id: str,
-    user_id: str,
-    effective_at: datetime,
-    provider: str = "regex",  # later: "llm"
-) -> ExtractionResult:
-    ...
-```
-
-**Definition of done for Phase 0:**
-- [ ] 6 new tables exist, with Pydantic models and basic CRUD
-- [ ] All tables have `provenance` column
-- [ ] Multi-step writes use single-commit transactions
-- [ ] Chat only creates JournalEntry for substantive messages
-- [ ] FTS5 search index exists and is used by the search endpoint
-- [ ] Shared `extraction.py` service exists, used by both chat and ingest
-- [ ] All existing tests still pass + new tests for the additions
+All items delivered in commit `f114cb3`:
+- 6 new tables (activities, metric_observations, protocols, protocol_executions, insights, heuristics)
+- Provenance column on all tables
+- Transaction safety for multi-step writes
+- Substantive-message filtering for journal entries
+- FTS5 search index
+- Shared extraction service (`services/extraction.py`)
+- 16 passing tests
 
 ---
 
-## Phase 1: Real Data First, Then Extraction (Weeks 1–3)
+## Phase 1A: Conversational Questionnaires + Hybrid Extraction ✅ COMPLETE
 
-**Why this order?** The previous plan designed extraction in the abstract, then
-tested on real data later. That's backwards. The WHYNN logs are the ground
-truth. Understand them first, then build extraction that actually works.
+**Context:** After analyzing the WHYNN logs, the approach pivoted from bulk log
+import to building a conversational input pipeline first — the system should be
+usable for *new* daily data before worrying about historical import.
 
-### 1.1 Characterize the WHYNN Logs (Already Done)
+### What was built:
 
-Analysis of `III_DAILY_LOGS.txt` (2,468 lines, ~26 entries, Apr 7 – May 2, 2025):
+1. **Questionnaire system** — Template-driven conversational data collection
+   - Schema: `questionnaire_templates` + `questionnaire_sessions` tables
+   - Pydantic models: `QuestionDef`, `QuestionnaireTemplate`, `QuestionnaireSession`
+   - Full CRUD repository methods
+   - REST endpoints: `POST/GET /api/v1/questionnaires/templates`
 
-**Structure:** Section-based with clear headers:
-- `SYSTEM METRICS:` → sleep, weight, mood, energy, emotional state
-- `BREATHWORK & PHYSICAL METRICS:` → CO₂ holds, lung capacity, breath cadence
-- `TRAINING EXECUTION:` → session type, duration, rounds, strike counts, heart rate
-- `NUTRITION & HYDRATION:` → hydration oz, meals, macros, supplement stacks
-- `BUFFS TRIGGERED:` → domain-specific achievement markers (RPG framing)
-- `XP AWARDS:` → gamified progress tracking
-- `SYSTEM NOTES:` → freeform reflections, emotional processing, dream logs
+2. **Natural language answer parser** (`services/answer_parser.py`)
+   - Handles: numeric ("7 hours", "~140"), scale ("8/10"), boolean, choice, text
+   - Word-to-number conversion, approximate value handling
 
-**Key challenges:**
-- Fields often `[Not recorded]` — must handle gracefully
-- Inconsistent field names (`CO₂ Hold` vs `Max CO₂ Hold`, `Total Hydration` vs `Hydration Total`)
-- Freeform emotional/dream content resists schema mapping
-- RPG framing (buffs, XP, levels) is domain-specific vocabulary
-- Some entries are combat-focused, others emotional-recovery, others ritual-only
-- No canonical intra-day timestamps; approximate times only
-- Unit variance (km/miles, oz/L, bpm/beats per minute)
+3. **Chat-questionnaire integration** (`services/questionnaire.py`)
+   - `/morning`, `/checkin`, `/training` commands start questionnaire sessions
+   - Active sessions intercept chat flow — answers are parsed, not extracted
+   - On completion: creates DailyCheckin, Activity, or MetricObservation records
+
+4. **LLM extraction upgrade** (`services/extraction.py`)
+   - Three modes: `regex` (default), `llm` (OpenAI), `hybrid` (LLM + regex fallback)
+   - Chat now uses `hybrid` mode
+   - GPT-4o-mini for structured extraction, regex fallback when no API key
+
+5. **Provenance plumbing** — All Create schemas now carry provenance through to
+   the database. LLM-extracted and questionnaire-sourced data is tagged
+   `system_extracted` for data lineage tracking.
+
+### 19 tests passing (16 original + 3 new)
+
+---
+
+## Phase 1B: Real Data Import + Extraction Iteration
+
+**Why still needed:** The questionnaire system handles *new* data. Historical
+WHYNN logs (~26 daily entries) still need import to seed the insight engine.
+
+### 1.1 Characterize the WHYNN Logs ✅ (Done in prior session)
 
 ### 1.2 Build Section-Based Log Parser
 
-The WHYNN logs are not freeform prose — they're sectioned documents. Build a
-deterministic parser that splits entries by date header, then splits sections
-by header keyword.
-
-```python
-def parse_whynn_entry(raw_text: str) -> dict:
-    """Split a single day's log into named sections."""
-    # Returns: {"system_metrics": "...", "training": "...", "nutrition": "...", ...}
-```
-
-This is deterministic, testable, and doesn't need an LLM.
-
-**Testing:** Write 5+ test cases from real entries (comprehensive entry, sparse
-entry, emotional-only entry, combat-heavy entry, missing-fields entry).
+Split entries by date header, then by section keyword
+(`SYSTEM METRICS:`, `TRAINING EXECUTION:`, etc.). Deterministic, no LLM needed.
 
 ### 1.3 Build Deterministic Field Extractors Per Section
 
-For each section type, write regex/pattern extractors for structured fields:
+Regex extractors for structured fields: sleep hours, mood, body weight,
+strike counts, rounds, duration, hydration, CO₂ holds, etc.
 
-```python
-# From SYSTEM METRICS section:
-extract_sleep_hours("Total Sleep: ~7 hours") → 7.0
-extract_mood("Mood: 8/10") → 8
-extract_body_weight("Morning Body Weight: 138.1 lbs") → (138.1, "lbs")
-
-# From TRAINING section:
-extract_strikes("Total Strikes: 488") → 488
-extract_rounds("Rounds: 6") → 6
-extract_duration("57 min total") → 57
-
-# From NUTRITION section:
-extract_hydration("Total Hydration: ~140 oz") → (140.0, "oz")
-```
-
-Handle `[Not recorded]` → `None`. Handle unit variance. Handle approximate
-values (`~140` → `140.0`).
-
-### 1.4 Wire Up LLM Extraction for Freeform Content
-
-The structured fields (sleep, weight, strikes) can be extracted deterministically.
-The freeform content (emotional notes, dream logs, system reflections) needs LLM.
-
-Use OpenAI structured outputs to extract:
-- Tags/themes from freeform text
-- Emotional state classification (not diagnosis — classification)
-- Task/commitment mentions buried in narrative
-- Activity descriptions from ambiguous text
-
-**Implementation:**
-- Use `response_format` with a Pydantic model for structured output
-- GPT-4o-mini for extraction (cheap, fast, good at structured output)
-- Fallback to regex-only if no API key is set
-- Log extraction confidence per field
-
-**Key principle:** Deterministic extraction for structured fields. LLM only
-for freeform content that resists regex. This keeps costs low and results
-predictable.
-
-### 1.5 Build Bulk Import Tool
+### 1.4 Build Bulk Import Tool
 
 ```python
 # scripts/import_whynn_logs.py
-# 1. Read III_DAILY_LOGS.txt
-# 2. Split into individual day entries by date header
-# 3. For each entry:
-#    a. Create SourceDocument (provenance='import')
-#    b. Run extraction pipeline
-#    c. Create DailyCheckin, Activities, MetricObservations, JournalEntry
-#    d. Report: what was extracted, what was skipped, what failed
+# Parse → Extract → Create SourceDocument + DailyCheckin + Activities + Metrics
 ```
 
-Run against the full WHYNN dataset. Manually review 10+ entries for accuracy.
-Fix extraction bugs as they surface.
+### 1.5 Iterate Extraction on Real Failures
 
-### 1.6 Iterate Extraction on Real Failures
+Spot-check 20+ entries. Score accuracy. Fix failure modes. Re-import. Repeat
+until ≥ 80% accuracy on structured fields.
 
-This is the critical step. After bulk import:
-- Spot-check 20 random entries. Score extraction accuracy per field.
-- Identify the top 5 failure modes (what does the extractor get wrong?)
-- Fix them. Re-import. Re-check. Repeat until accuracy ≥ 80%.
-
-This loop will take longer than you expect. Budget 1+ weeks for it.
-
-**Definition of done for Phase 1:**
-- [ ] Bulk import successfully processes all WHYNN log entries
-- [ ] Each entry produces: SourceDocument + DailyCheckin + 0-N Activities + 0-N MetricObservations + 0-1 JournalEntry
-- [ ] Spot-check accuracy ≥ 80% on structured fields (sleep, weight, mood, strikes, hydration)
-- [ ] Freeform content captured as JournalEntry with LLM-extracted tags
-- [ ] Import tool reports extraction stats (fields found, fields missing, confidence)
+**Definition of done for Phase 1B:**
+- [ ] Bulk import processes all WHYNN log entries
+- [ ] Each entry produces: SourceDocument + DailyCheckin + Activities + MetricObservations + JournalEntry
+- [ ] Spot-check accuracy ≥ 80% on structured fields
+- [ ] Import tool reports extraction stats
 
 ---
 

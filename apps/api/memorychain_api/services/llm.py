@@ -4,6 +4,16 @@ from typing import Iterable
 
 from ..config import settings
 
+# Export the openai client for use in other services
+try:
+    from openai import OpenAI
+    if settings.llm_provider == "openai" and settings.openai_api_key:
+        openai_client = OpenAI(api_key=settings.openai_api_key)
+    else:
+        openai_client = None
+except (ImportError, AttributeError):
+    openai_client = None
+
 
 def _local_reply(
     *,

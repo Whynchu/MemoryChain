@@ -694,3 +694,157 @@ def test_task_detail_and_pagination() -> None:
         params={"user_id": user_id},
     )
     assert missing.status_code == 404
+
+
+def test_questionnaire_template_crud() -> None:
+    """Test questionnaire template CRUD operations."""
+    client = TestClient(create_app())
+    user_id = f"q_user_{uuid.uuid4().hex[:8]}"
+    
+    # Create a template
+    template_data = {
+        "user_id": user_id,
+        "name": "Morning Check-in",
+        "description": "Daily morning questionnaire",
+        "questions": [
+            {
+                "id": "sleep_hours",
+                "question_text": "How many hours did you sleep?",
+                "question_type": "numeric",
+                "min_value": 0,
+                "max_value": 12,
+                "required": True
+            },
+            {
+                "id": "mood",
+                "question_text": "How's your mood today?",
+                "question_type": "scale",
+                "min_value": 1,
+                "max_value": 10,
+                "required": True
+            }
+        ],
+        "target_objects": ["daily_checkin"]
+    }
+    
+    # Create template
+    create_response = client.post("/api/v1/questionnaires/templates", headers=AUTH, json=template_data)
+    assert create_response.status_code == 200
+    template = create_response.json()
+    assert template["name"] == "Morning Check-in"
+    assert len(template["questions"]) == 2
+    template_id = template["id"]
+    
+    # List templates
+    list_response = client.get(f"/api/v1/questionnaires/templates?user_id={user_id}", headers=AUTH)
+    assert list_response.status_code == 200
+    templates = list_response.json()
+    assert len(templates) >= 1
+    assert any(t["id"] == template_id for t in templates)
+    
+    # Get specific template
+    get_response = client.get(f"/api/v1/questionnaires/templates/{template_id}?user_id={user_id}", headers=AUTH)
+    assert get_response.status_code == 200
+    retrieved_template = get_response.json()
+    assert retrieved_template["id"] == template_id
+    assert retrieved_template["name"] == "Morning Check-in"
+
+
+def test_answer_parser() -> None:
+    """Test answer parsing for different question types."""
+    from memorychain_api.services.answer_parser import parse_answer, AnswerParsingError
+    
+    # Test numeric parsing
+    assert parse_answer("7", "numeric") == 7.0
+    assert parse_answer("7.5", "numeric") == 7.5
+    assert parse_answer("seven", "numeric") == 7.0
+    assert parse_answer("~7 hours", "numeric") == 7.0
+    
+    # Test scale parsing
+    assert parse_answer("8/10", "scale", min_value=1, max_value=10) == 8
+    assert parse_answer("8 out of 10", "scale", min_value=1, max_value=10) == 8
+    assert parse_answer("8", "scale", min_value=1, max_value=10) == 8
+    
+    # Test boolean parsing
+    assert parse_answer("yes", "boolean") == True
+    assert parse_answer("no", "boolean") == False
+    assert parse_answer("true", "boolean") == True
+    assert parse_answer("false", "boolean") == False
+    
+    # Test choice parsing
+    choices = ["good", "okay", "bad"]
+    assert parse_answer("good", "choice", choices=choices) == "good"
+    assert parse_answer("ok", "choice", choices=choices) == "okay"  # partial match
+    
+    # Test text parsing
+    assert parse_answer("This is some text", "text") == "This is some text"
+    
+    # Test error cases
+    try:
+        parse_answer("invalid", "numeric")
+        assert False, "Should have raised AnswerParsingError"
+    except AnswerParsingError:
+        pass
+
+
+def test_questionnaire_chat_flow() -> None:
+    """Test questionnaire integration with chat flow."""
+    client = TestClient(create_app())
+    user_id = f"q_chat_{uuid.uuid4().hex[:8]}"
+    
+    # First create a template
+    template_data = {
+        "user_id": user_id,
+        "name": "morning_checkin", 
+        "description": "Morning check-in",
+        "questions": [
+            {
+                "id": "sleep",
+                "question_text": "How many hours did you sleep?",
+                "question_type": "numeric",
+                "min_value": 0,
+                "max_value": 12,
+                "required": True
+            },
+            {
+                "id": "mood",
+                "question_text": "How's your mood? (1-10)",
+                "question_type": "scale", 
+                "min_value": 1,
+                "max_value": 10,
+                "required": True
+            }
+        ],
+        "target_objects": ["daily_checkin"]
+    }
+    
+    create_response = client.post("/api/v1/questionnaires/templates", headers=AUTH, json=template_data)
+    assert create_response.status_code == 200
+    
+    # Start questionnaire via chat command
+    chat_data = {"user_id": user_id, "message": "/morning"}
+    start_response = client.post("/api/v1/chat", headers=AUTH, json=chat_data)
+    assert start_response.status_code == 200
+    
+    chat_result = start_response.json()
+    assert "morning_checkin" in chat_result["assistant_message"]  # Template name, not description
+    assert "How many hours did you sleep?" in chat_result["assistant_message"]
+    conversation_id = chat_result["conversation_id"]
+    
+    # Answer first question
+    answer1_data = {"user_id": user_id, "message": "7.5", "conversation_id": conversation_id}
+    answer1_response = client.post("/api/v1/chat", headers=AUTH, json=answer1_data)
+    assert answer1_response.status_code == 200
+    
+    answer1_result = answer1_response.json()
+    assert "How's your mood?" in answer1_result["assistant_message"]
+    assert "Question 2 of 2" in answer1_result["assistant_message"]
+    
+    # Answer second question
+    answer2_data = {"user_id": user_id, "message": "8", "conversation_id": conversation_id}
+    answer2_response = client.post("/api/v1/chat", headers=AUTH, json=answer2_data)
+    assert answer2_response.status_code == 200
+    
+    answer2_result = answer2_response.json()
+    assert "completed" in answer2_result["assistant_message"].lower()
+    assert "summary" in answer2_result["assistant_message"].lower()

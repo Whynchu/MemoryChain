@@ -295,6 +295,43 @@ def initialize(conn: sqlite3.Connection) -> None:
 
         CREATE INDEX IF NOT EXISTS idx_protocol_executions_user_protocol
         ON protocol_executions (user_id, protocol_id);
+
+        -- Questionnaire tables
+        CREATE TABLE IF NOT EXISTS questionnaire_templates (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            name TEXT NOT NULL,
+            description TEXT,
+            questions_json TEXT NOT NULL,
+            target_objects_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            active INTEGER NOT NULL DEFAULT 1
+        );
+
+        CREATE TABLE IF NOT EXISTS questionnaire_sessions (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            template_id TEXT NOT NULL,
+            conversation_id TEXT,
+            status TEXT NOT NULL,
+            current_question_index INTEGER NOT NULL DEFAULT 0,
+            answers_json TEXT NOT NULL,
+            raw_responses_json TEXT NOT NULL,
+            started_at TEXT NOT NULL,
+            completed_at TEXT,
+            FOREIGN KEY (template_id) REFERENCES questionnaire_templates(id),
+            FOREIGN KEY (conversation_id) REFERENCES conversations(id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_questionnaire_templates_user_active
+        ON questionnaire_templates (user_id, active);
+
+        CREATE INDEX IF NOT EXISTS idx_questionnaire_sessions_user_status
+        ON questionnaire_sessions (user_id, status);
+
+        CREATE INDEX IF NOT EXISTS idx_questionnaire_sessions_template
+        ON questionnaire_sessions (template_id, started_at);
         """
     )
 

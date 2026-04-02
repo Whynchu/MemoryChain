@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import Literal
+from typing import Literal, Any
 
 from pydantic import BaseModel, Field
 
@@ -43,6 +43,8 @@ EngagementEventType = Literal[
     "app_open_no_entry",
     "partial_entry",
 ]
+QuestionType = Literal["numeric", "scale", "boolean", "text", "choice"]
+QuestionnaireSessionStatus = Literal["in_progress", "completed", "abandoned"]
 
 
 class SourceDocumentCreate(BaseModel):
@@ -103,6 +105,7 @@ class DailyCheckinCreate(BaseModel):
     pain_notes: str | None = None
     hydration_start: float | None = None
     hydration_unit: str | None = None
+    provenance: Provenance = "user"
 
 
 class DailyCheckin(BaseModel):
@@ -138,6 +141,7 @@ class ActivityCreate(BaseModel):
     description: str | None = None
     notes: str | None = None
     metadata: dict = Field(default_factory=dict)
+    provenance: Provenance = "user"
     provenance: Provenance = "user"
 
 
@@ -339,6 +343,7 @@ class GoalCreate(BaseModel):
     status: GoalStatus = "active"
     priority: Priority = "medium"
     target_date: date | None = None
+    provenance: Provenance = "user"
 
 
 class GoalUpdate(BaseModel):
@@ -369,6 +374,7 @@ class TaskCreate(BaseModel):
     status: TaskStatus = "todo"
     priority: Priority = "medium"
     due_at: datetime | None = None
+    provenance: Provenance = "user"
 
 
 class TaskUpdate(BaseModel):
@@ -517,6 +523,59 @@ class ExtractionSummary(BaseModel):
     goal_ids: list[str] = Field(default_factory=list)
     activity_ids: list[str] = Field(default_factory=list)
     metric_ids: list[str] = Field(default_factory=list)
+
+
+# Questionnaire Schema
+class QuestionDef(BaseModel):
+    """Definition of a single question in a questionnaire template."""
+    id: str
+    question_text: str
+    question_type: QuestionType
+    required: bool = True
+    min_value: float | None = None  # For numeric/scale questions
+    max_value: float | None = None  # For numeric/scale questions  
+    choices: list[str] = Field(default_factory=list)  # For choice questions
+    validation_regex: str | None = None  # For text questions
+    help_text: str | None = None
+
+
+class QuestionnaireTemplateCreate(BaseModel):
+    user_id: str
+    name: str
+    description: str | None = None
+    questions: list[QuestionDef]
+    target_objects: list[str] = Field(default_factory=list)  # What data models this populates
+
+
+class QuestionnaireTemplate(BaseModel):
+    id: str
+    user_id: str
+    name: str
+    description: str | None = None
+    questions: list[QuestionDef]
+    target_objects: list[str] = Field(default_factory=list)
+    created_at: datetime
+    updated_at: datetime
+    active: bool = True
+
+
+class QuestionnaireSessionCreate(BaseModel):
+    user_id: str
+    template_id: str
+    conversation_id: str | None = None
+
+
+class QuestionnaireSession(BaseModel):
+    id: str
+    user_id: str
+    template_id: str
+    conversation_id: str | None = None
+    status: QuestionnaireSessionStatus
+    current_question_index: int
+    answers: dict[str, Any] = Field(default_factory=dict)  # question_id -> parsed_value
+    raw_responses: dict[str, str] = Field(default_factory=dict)  # question_id -> raw_text
+    started_at: datetime
+    completed_at: datetime | None = None
 
 
 class ChatResponse(BaseModel):

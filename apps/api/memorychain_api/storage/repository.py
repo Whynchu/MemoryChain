@@ -34,6 +34,10 @@ from ..schemas import (
     ProtocolExecution,
     ProtocolExecutionCreate,
     ProtocolUpdate,
+    QuestionnaireTemplate,
+    QuestionnaireTemplateCreate,
+    QuestionnaireSession,
+    QuestionnaireSessionCreate,
     SearchResult,
     SourceDocument,
     SourceDocumentCreate,
@@ -153,8 +157,8 @@ class Repository:
                 id, user_id, source_document_id, date, created_at, effective_at,
                 sleep_hours, sleep_quality, mood, energy, body_weight,
                 body_weight_unit, immediate_thoughts, pain_notes,
-                hydration_start, hydration_unit
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                hydration_start, hydration_unit, provenance
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 checkin_id,
@@ -173,6 +177,7 @@ class Repository:
                 payload.pain_notes,
                 payload.hydration_start,
                 payload.hydration_unit,
+                payload.provenance,
             ),
         )
         self._index_for_search(object_type="daily_checkin", object_id=checkin_id, user_id=payload.user_id, content=f"{payload.immediate_thoughts or ''} {payload.pain_notes or ''}", effective_at=payload.effective_at.isoformat())
@@ -196,8 +201,8 @@ class Repository:
             """
             INSERT INTO goals (
                 id, user_id, created_at, updated_at, title,
-                description, status, priority, target_date
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                description, status, priority, target_date, provenance
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 goal_id,
@@ -209,6 +214,7 @@ class Repository:
                 payload.status,
                 payload.priority,
                 _date_to_iso(payload.target_date),
+                payload.provenance,
             ),
         )
         self._index_for_search(object_type="goal", object_id=goal_id, user_id=payload.user_id, content=f"{payload.title} {payload.description or ''}", effective_at=now)
@@ -308,8 +314,8 @@ class Repository:
             """
             INSERT INTO tasks (
                 id, user_id, goal_id, created_at, updated_at, title, description,
-                status, priority, due_at, completed_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                status, priority, due_at, completed_at, provenance
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 task_id,
@@ -323,6 +329,7 @@ class Repository:
                 payload.priority,
                 payload.due_at.isoformat() if payload.due_at else None,
                 completed_at,
+                payload.provenance,
             ),
         )
         self._index_for_search(object_type="task", object_id=task_id, user_id=payload.user_id, content=f"{payload.title} {payload.description or ''}", effective_at=now)
@@ -2070,6 +2077,198 @@ class Repository:
             validation_notes=row["validation_notes"],
             insight_id=row["insight_id"],
             provenance=row["provenance"],
+        )
+
+    # Questionnaire Template methods
+    def create_questionnaire_template(self, template: QuestionnaireTemplateCreate) -> QuestionnaireTemplate:
+        now = datetime.now(timezone.utc)
+        template_id = _new_id("qt")
+        
+        self.conn.execute(
+            """
+            INSERT INTO questionnaire_templates (
+                id, user_id, name, description, questions_json, target_objects_json,
+                created_at, updated_at, active
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                template_id,
+                template.user_id,
+                template.name,
+                template.description,
+                json.dumps([q.model_dump() for q in template.questions]),
+                json.dumps(template.target_objects),
+                now.isoformat(),
+                now.isoformat(),
+                1,
+            ),
+        )
+        self.conn.commit()
+        
+        row = self.conn.execute(
+            "SELECT * FROM questionnaire_templates WHERE id = ?", (template_id,)
+        ).fetchone()
+        return self._row_to_questionnaire_template(row)
+
+    def list_questionnaire_templates(self, user_id: str, active_only: bool = True) -> list[QuestionnaireTemplate]:
+        if active_only:
+            rows = self.conn.execute(
+                "SELECT * FROM questionnaire_templates WHERE user_id = ? AND active = 1 ORDER BY created_at DESC",
+                (user_id,),
+            ).fetchall()
+        else:
+            rows = self.conn.execute(
+                "SELECT * FROM questionnaire_templates WHERE user_id = ? ORDER BY created_at DESC",
+                (user_id,),
+            ).fetchall()
+        return [self._row_to_questionnaire_template(row) for row in rows]
+
+    def get_questionnaire_template(self, template_id: str, user_id: str) -> QuestionnaireTemplate | None:
+        row = self.conn.execute(
+            "SELECT * FROM questionnaire_templates WHERE id = ? AND user_id = ?",
+            (template_id, user_id),
+        ).fetchone()
+        return self._row_to_questionnaire_template(row) if row else None
+
+    # Questionnaire Session methods
+    def create_questionnaire_session(self, session: QuestionnaireSessionCreate) -> QuestionnaireSession:
+        now = datetime.now(timezone.utc)
+        session_id = _new_id("qs")
+        
+        self.conn.execute(
+            """
+            INSERT INTO questionnaire_sessions (
+                id, user_id, template_id, conversation_id, status,
+                current_question_index, answers_json, raw_responses_json, started_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                session_id,
+                session.user_id,
+                session.template_id,
+                session.conversation_id,
+                "in_progress",
+                0,
+                "{}",
+                "{}",
+                now.isoformat(),
+            ),
+        )
+        self.conn.commit()
+        
+        row = self.conn.execute(
+            "SELECT * FROM questionnaire_sessions WHERE id = ?", (session_id,)
+        ).fetchone()
+        return self._row_to_questionnaire_session(row)
+
+    def get_questionnaire_session(self, session_id: str, user_id: str) -> QuestionnaireSession | None:
+        row = self.conn.execute(
+            "SELECT * FROM questionnaire_sessions WHERE id = ? AND user_id = ?",
+            (session_id, user_id),
+        ).fetchone()
+        return self._row_to_questionnaire_session(row) if row else None
+
+    def update_questionnaire_session(
+        self, 
+        session_id: str, 
+        user_id: str,
+        current_question_index: int | None = None,
+        answers: dict | None = None,
+        raw_responses: dict | None = None,
+        status: str | None = None
+    ) -> QuestionnaireSession | None:
+        # First get current session
+        session = self.get_questionnaire_session(session_id, user_id)
+        if not session:
+            return None
+            
+        # Update fields that were provided
+        now = datetime.now(timezone.utc)
+        updates = []
+        params = []
+        
+        if current_question_index is not None:
+            updates.append("current_question_index = ?")
+            params.append(current_question_index)
+        
+        if answers is not None:
+            updates.append("answers_json = ?")
+            params.append(json.dumps(answers))
+            
+        if raw_responses is not None:
+            updates.append("raw_responses_json = ?") 
+            params.append(json.dumps(raw_responses))
+            
+        if status is not None:
+            updates.append("status = ?")
+            params.append(status)
+            if status == "completed":
+                updates.append("completed_at = ?")
+                params.append(now.isoformat())
+        
+        if not updates:
+            return session
+            
+        query = f"UPDATE questionnaire_sessions SET {', '.join(updates)} WHERE id = ? AND user_id = ?"
+        params.extend([session_id, user_id])
+        
+        self.conn.execute(query, params)
+        self.conn.commit()
+        
+        return self.get_questionnaire_session(session_id, user_id)
+
+    def get_active_questionnaire_session(self, user_id: str, conversation_id: str | None = None) -> QuestionnaireSession | None:
+        """Get the current in-progress questionnaire session for a user/conversation."""
+        if conversation_id:
+            row = self.conn.execute(
+                """
+                SELECT * FROM questionnaire_sessions 
+                WHERE user_id = ? AND conversation_id = ? AND status = 'in_progress'
+                ORDER BY started_at DESC LIMIT 1
+                """,
+                (user_id, conversation_id),
+            ).fetchone()
+        else:
+            row = self.conn.execute(
+                """
+                SELECT * FROM questionnaire_sessions 
+                WHERE user_id = ? AND status = 'in_progress'
+                ORDER BY started_at DESC LIMIT 1
+                """,
+                (user_id,),
+            ).fetchone()
+        return self._row_to_questionnaire_session(row) if row else None
+
+    def _row_to_questionnaire_template(self, row: sqlite3.Row) -> QuestionnaireTemplate:
+        from ..schemas import QuestionDef  # Import here to avoid circular imports
+        
+        questions_data = json.loads(row["questions_json"])
+        questions = [QuestionDef(**q) for q in questions_data]
+        
+        return QuestionnaireTemplate(
+            id=row["id"],
+            user_id=row["user_id"],
+            name=row["name"],
+            description=row["description"],
+            questions=questions,
+            target_objects=json.loads(row["target_objects_json"]),
+            created_at=datetime.fromisoformat(row["created_at"]),
+            updated_at=datetime.fromisoformat(row["updated_at"]),
+            active=bool(row["active"]),
+        )
+
+    def _row_to_questionnaire_session(self, row: sqlite3.Row) -> QuestionnaireSession:
+        return QuestionnaireSession(
+            id=row["id"],
+            user_id=row["user_id"],
+            template_id=row["template_id"],
+            conversation_id=row["conversation_id"],
+            status=row["status"],
+            current_question_index=row["current_question_index"],
+            answers=json.loads(row["answers_json"]),
+            raw_responses=json.loads(row["raw_responses_json"]),
+            started_at=datetime.fromisoformat(row["started_at"]),
+            completed_at=datetime.fromisoformat(row["completed_at"]) if row["completed_at"] else None,
         )
 
 
