@@ -6,7 +6,7 @@ A digital partner that lives alongside you, knows your habits, tracks your metri
 
 MemoryChain separates *observations* (what happened) from *interpretations* (patterns) from *operational rules* (what to do about it). Casual conversation never accidentally becomes an execution constraint — but real patterns get surfaced and tracked.
 
-**Current state:** v0.3.0 — Backend functional with 36 passing tests. Phase 0 foundation complete. Building toward conversational questionnaires and smart extraction.
+**Current state:** v0.4.0 — 47 passing tests. Phase 0 foundation ✅, Phase 1A questionnaires + hybrid extraction ✅, Phase 1B WHYNN log import ✅. Building toward the insight engine.
 
 ---
 
@@ -48,6 +48,9 @@ The system doesn't just store — it *notices*. As data accumulates, patterns em
   - `Task` / `Goal` — from explicit markers or context
 - Immutable `SourceDocument` with content hash dedup
 - FTS5 full-text search across all object types
+- **Questionnaire mode** — structured Q&A via `/morning`, `/checkin`, `/training` commands
+- **Hybrid extraction** — LLM (GPT-4o-mini) with regex fallback; works offline
+- **Bulk historical import** — deterministic parser for WHYNN log format (`scripts/import_whynn_logs.py`)
 
 **Data Management:**
 - Full CRUD for 11 object types: goals, tasks, journal entries, check-ins, activities, metrics, protocols, protocol executions, insights, heuristics
@@ -66,15 +69,13 @@ The system doesn't just store — it *notices*. As data accumulates, patterns em
 
 **See [NEXT_STEPS.md](./NEXT_STEPS.md) for the full roadmap.**
 
-**Building now — Phase 1: Conversational Questionnaires**
-1. Questionnaire templates (Morning Check-in, Post-Training Debrief, Evening Reflection)
-2. Session tracking — the system remembers where you are in a Q&A flow
-3. Answer parsing — "about 7 hours" → `sleep_hours: 7.0`
-4. Chat integration — questionnaires run inside the conversation, not a separate UI
-5. LLM-backed extraction upgrade — schema-prompted extraction with regex fallback
+**Building now — Phase 2: Insight Engine**
+1. Sleep-mood correlation detector (first concrete insight)
+2. `POST /api/v1/insights/detect` endpoint
+3. Heuristic promotion — confirmed patterns become rules
+4. Insight rejection with audit trail
 
 **Then:**
-- Phase 2: Insight engine — pattern detection, confidence scoring, promotion/rejection
 - Phase 3: Heuristic rules — "if X then Y" operational logic derived from validated patterns
 - Phase 4: Daily workflow — CLI/mobile interface, scheduled briefings, the full operator experience
 
@@ -84,9 +85,10 @@ The system doesn't just store — it *notices*. As data accumulates, patterns em
 
 - `apps/api` — FastAPI backend (Python 3.11+)
   - `routers/` — API endpoints (chat, ingest, goals, tasks, activities, metrics, protocols, insights, heuristics, etc.)
-  - `services/` — Business logic (extraction, chat, ingestion, LLM, reviews)
+  - `services/` — Business logic (extraction, chat, ingestion, LLM, reviews, questionnaire, whynn_parser, whynn_extractor)
   - `storage/` — Database layer (SQLite, repository pattern)
   - `schemas.py` — Pydantic models for all objects
+- `scripts/` — Utility scripts (`import_whynn_logs.py` — bulk historical log import)
 - `docs/` — Architecture, schemas, design decisions
 - `users/` — User data and historical logs
 - `core/` — Legacy reference materials
@@ -106,7 +108,7 @@ export OPENAI_API_KEY=sk-...
 python -m uvicorn memorychain_api.main:app --reload
 
 # Test
-pytest tests/ -v  # 36 tests
+pytest tests/ -v  # 47 tests
 ```
 
 **API at** `http://localhost:8000` — Docs at `http://localhost:8000/docs` — Auth: `X-API-Key: dev-key`
@@ -162,10 +164,10 @@ curl -X POST http://localhost:8000/api/v1/reviews/generate \
 
 ## Testing
 
-36 tests across 2 test files:
+47 tests across 2 test files:
 
 ```bash
 pytest tests/ -v
-# tests/test_api.py       — 16 tests (core API, chat, search, prompts, audit)
+# tests/test_api.py       — 27 tests (core API, chat, search, prompts, audit, WHYNN parser/extractor)
 # tests/test_phase0.py    — 20 tests (activities, metrics, protocols, insights, heuristics, FTS5, extraction)
 ```
