@@ -848,3 +848,272 @@ def test_questionnaire_chat_flow() -> None:
     answer2_result = answer2_response.json()
     assert "completed" in answer2_result["assistant_message"].lower()
     assert "summary" in answer2_result["assistant_message"].lower()
+
+
+# ---------------------------------------------------------------------------
+# WHYNN parser + extractor tests
+# ---------------------------------------------------------------------------
+
+from memorychain_api.services.whynn_parser import split_entries, parse_entry
+from memorychain_api.services.whynn_extractor import (
+    extract_system_metrics,
+    extract_breathwork_metrics,
+    extract_training,
+    extract_nutrition,
+    extract_entry,
+)
+
+
+SAMPLE_COMPREHENSIVE = """April 15, 2025
+
+SYSTEM METRICS:
+    \u2022 Morning Body Weight: ~137.2 lbs (estimated AM)
+    \u2022 Total Sleep: 7\u20138 hrs (minor interruption)
+    \u2022 Sleep Quality: 8/10
+    \u2022 Mood: 6\u20137/10 (minor emotional turbulence)
+    \u2022 Energy: 7\u20138/10 (slight morning grogginess)
+    \u2022 Immediate Thoughts: Conflict processing
+
+BREATHWORK & PHYSICAL METRICS:
+    \u2022 CO? Hold: 31.22 seconds (Post-Gate)
+    \u2022 Max Expiratory Pressure: [Not recorded]
+
+TRAINING EXECUTION:
+    \u2022 Training Session Type: Outdoor Tempo Run
+    \u2022 Session Notes:
+        \u25e6 Distance: 5.09 km
+        \u25e6 Duration: 45:26
+        \u25e6 Average HR: 144 bpm
+        \u25e6 Max HR: 183 bpm
+        \u25e6 Total Strikes: 488
+
+NUTRITION & HYDRATION:
+    \u2022 Total Hydration: ~165 oz
+
+BUFFS TRIGGERED:
+    \u2022 Liquid Core II (Hydration)
+    \u2022 Burn Discipline II
+
+XP AWARDS:
+    \u2022 Sprint Phase Completion: +25 XP
+    \u2022 TOTAL XP GAINED: +65 XP
+
+SYSTEM NOTES:
+    Trained through fatigue, managed emotional spikes.
+
+\u2022\u2022 SIGN-OFF:
+Logged by: Patternborn Sovereign
+"""
+
+
+SAMPLE_SPARSE = """April 7, 2025
+
+SYSTEM METRICS:
+    \u2022 Morning Body Weight: [Not recorded]
+    \u2022 Total Sleep: [Not recorded]
+    \u2022 Sleep Quality: [Not recorded]
+    \u2022 Mood: [Not recorded]
+    \u2022 Energy: [Not recorded]
+
+BREATHWORK & PHYSICAL METRICS:
+    \u2022 CO? Hold: [Not recorded]
+
+TRAINING EXECUTION:
+    \u2022 Training Session Type: Indoor Engine Flow + High Volume Bagwork
+    \u2022 Session Notes:
+        \u25e6 Total Strikes: 488
+
+NUTRITION & HYDRATION:
+    \u2022 Total Hydration: ~140 oz water + IV
+
+SYSTEM NOTES:
+    Trained in solitude.
+"""
+
+
+SAMPLE_NUMERIC_VARIANTS = """April 18, 2025
+
+SYSTEM METRICS:
+    \u2022 Morning Body Weight: 138.1 lbs (underwear + shirt)
+    \u2022 Total Sleep: 8 hours (5 core + 3 hr nap)
+    \u2022 Sleep Quality: 7/10
+    \u2022 Mood: 8/10 (excited, training focus)
+    \u2022 Energy: 8/10
+
+BREATHWORK & PHYSICAL METRICS:
+    \u2022 Max CO? Hold: 43.15 seconds (non-formal trial)
+
+TRAINING EXECUTION:
+    \u2022 Training Session Type: Heavy Bag Session
+    \u2022 Session Notes:
+        \u25e6 Total Strikes: 208
+
+NUTRITION & HYDRATION:
+    \u2022 Total Hydration: 161 oz (balanced with salt/fuel intake)
+"""
+
+
+SAMPLE_RANGE_NO_SLASH = """April 19, 2025
+
+SYSTEM METRICS:
+    \u2022 Morning Body Weight: 138.8 lbs (T-shirt & underwear)
+    \u2022 Total Sleep: 8 hours (5 core + 3 hr nap)
+    \u2022 Sleep Quality: 8\u20139
+    \u2022 Mood: 6\u20137
+    \u2022 Energy: 8\u20139
+
+BREATHWORK & PHYSICAL METRICS:
+    \u2022 CO? Hold: [Not recorded]
+
+TRAINING EXECUTION:
+    \u2022 Training Session Type: Recovery Mobility
+    \u2022 Session Notes: Light mobility work only.
+
+NUTRITION & HYDRATION:
+    \u2022 Total Hydration: 160 oz
+"""
+
+
+SAMPLE_DESCRIPTIVE_MOOD = """April 13, 2025
+
+SYSTEM METRICS:
+    \u2022 Morning Body Weight: [Not recorded]
+    \u2022 Total Sleep: [Not recorded]
+    \u2022 Mood: Emotional pressure (tax-related) managed to stability
+    \u2022 Energy: Stable through tactical cycles
+
+BREATHWORK & PHYSICAL METRICS:
+    \u2022 CO? Hold: [Not recorded]
+
+TRAINING EXECUTION:
+    \u2022 Training Session Type: Recovery Day
+
+NUTRITION & HYDRATION:
+    \u2022 Total Hydration: ~133 oz
+"""
+
+
+def test_whynn_parser_split_entries():
+    """split_entries correctly finds date headers."""
+    text = SAMPLE_COMPREHENSIVE + "\n\n" + SAMPLE_SPARSE
+    entries = split_entries(text)
+    assert len(entries) == 2
+    assert "April 15, 2025" in entries[0]
+    assert "April 7, 2025" in entries[1]
+
+
+def test_whynn_parser_parse_entry_date():
+    """parse_entry correctly parses date and section names."""
+    entry = parse_entry(SAMPLE_COMPREHENSIVE)
+    assert entry.date == date(2025, 4, 15)
+    assert entry.raw_date == "April 15, 2025"
+    assert "SYSTEM METRICS" in entry.sections
+    assert "TRAINING EXECUTION" in entry.sections
+    assert "BREATHWORK & PHYSICAL METRICS" in entry.sections
+    assert "NUTRITION & HYDRATION" in entry.sections
+
+
+def test_whynn_extractor_comprehensive():
+    """Comprehensive entry: all key fields extracted correctly."""
+    entry = parse_entry(SAMPLE_COMPREHENSIVE)
+    sm = extract_system_metrics(entry.sections["SYSTEM METRICS"])
+    bw = extract_breathwork_metrics(entry.sections["BREATHWORK & PHYSICAL METRICS"])
+    tr = extract_training(entry.sections["TRAINING EXECUTION"])
+    nu = extract_nutrition(entry.sections["NUTRITION & HYDRATION"])
+
+    # System metrics
+    assert sm.body_weight_lbs == pytest.approx(137.2)
+    assert sm.sleep_hours == pytest.approx(7.0)  # lower bound of 7–8
+    assert sm.sleep_quality == pytest.approx(8.0)
+    assert sm.mood == pytest.approx(6.0)          # lower bound of 6–7
+    assert sm.energy == pytest.approx(7.0)
+    assert sm.immediate_thoughts == "Conflict processing"
+
+    # Breathwork
+    assert bw.co2_hold_seconds == pytest.approx(31.22)
+
+    # Training
+    assert tr.session_type == "Outdoor Tempo Run"
+    assert tr.distance_km == pytest.approx(5.09)
+    assert tr.duration_minutes == pytest.approx(45 + 26 / 60, rel=0.01)
+    assert tr.avg_hr_bpm == 144
+    assert tr.max_hr_bpm == 183
+    assert tr.total_strikes == 488
+
+    # Nutrition
+    assert nu.hydration_oz == pytest.approx(165.0)
+
+
+def test_whynn_extractor_sparse():
+    """Sparse entry: [Not recorded] fields return None."""
+    entry = parse_entry(SAMPLE_SPARSE)
+    sm = extract_system_metrics(entry.sections["SYSTEM METRICS"])
+    bw = extract_breathwork_metrics(entry.sections["BREATHWORK & PHYSICAL METRICS"])
+    nu = extract_nutrition(entry.sections["NUTRITION & HYDRATION"])
+
+    assert sm.sleep_hours is None
+    assert sm.mood is None
+    assert sm.energy is None
+    assert sm.body_weight_lbs is None
+    assert bw.co2_hold_seconds is None
+    assert nu.hydration_oz == pytest.approx(140.0)
+
+
+def test_whynn_extractor_numeric_variants():
+    """Handles integer-only mood/energy, plain hours sleep, parenthetical notes."""
+    entry = parse_entry(SAMPLE_NUMERIC_VARIANTS)
+    sm = extract_system_metrics(entry.sections["SYSTEM METRICS"])
+    bw = extract_breathwork_metrics(entry.sections["BREATHWORK & PHYSICAL METRICS"])
+    nu = extract_nutrition(entry.sections["NUTRITION & HYDRATION"])
+    tr = extract_training(entry.sections["TRAINING EXECUTION"])
+
+    assert sm.body_weight_lbs == pytest.approx(138.1)
+    assert sm.sleep_hours == pytest.approx(8.0)
+    assert sm.sleep_quality == pytest.approx(7.0)
+    assert sm.mood == pytest.approx(8.0)
+    assert sm.energy == pytest.approx(8.0)
+    assert bw.co2_hold_seconds == pytest.approx(43.15)
+    assert nu.hydration_oz == pytest.approx(161.0)
+    assert tr.total_strikes == 208
+
+
+def test_whynn_extractor_range_no_slash():
+    """Handles 'X–Y' ranges without /10 denominator."""
+    entry = parse_entry(SAMPLE_RANGE_NO_SLASH)
+    sm = extract_system_metrics(entry.sections["SYSTEM METRICS"])
+
+    assert sm.body_weight_lbs == pytest.approx(138.8)
+    assert sm.sleep_hours == pytest.approx(8.0)
+    assert sm.sleep_quality == pytest.approx(8.0)
+    assert sm.mood == pytest.approx(6.0)
+    assert sm.energy == pytest.approx(8.0)
+
+
+def test_whynn_extractor_descriptive_mood():
+    """Descriptive mood/energy text → None (not a number)."""
+    entry = parse_entry(SAMPLE_DESCRIPTIVE_MOOD)
+    sm = extract_system_metrics(entry.sections["SYSTEM METRICS"])
+
+    assert sm.mood is None
+    assert sm.energy is None
+    # Hydration should still work
+    nu = extract_nutrition(entry.sections["NUTRITION & HYDRATION"])
+    assert nu.hydration_oz == pytest.approx(133.0)
+
+
+def test_whynn_extract_entry_full():
+    """extract_entry top-level produces correct ExtractedWhynnEntry."""
+    from memorychain_api.services.whynn_extractor import extract_entry as do_extract
+    entry = parse_entry(SAMPLE_COMPREHENSIVE)
+    result = do_extract(entry)
+
+    assert result.system.body_weight_lbs == pytest.approx(137.2)
+    assert result.breathwork.co2_hold_seconds == pytest.approx(31.22)
+    assert result.training.total_strikes == 488
+    assert result.nutrition.hydration_oz == pytest.approx(165.0)
+    assert result.xp_total == 65
+    assert len(result.buffs) == 2
+    assert result.system_notes is not None and "fatigue" in result.system_notes.lower()
+
+
+import pytest
