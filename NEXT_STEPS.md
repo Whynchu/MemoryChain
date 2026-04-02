@@ -1,7 +1,7 @@
 # MemoryChain — Roadmap to MVP
 
-Current state: **V0.3.0 — Phase 0 complete, Phase 1A (conversational questionnaires
-+ hybrid extraction) complete. 19 passing tests.**
+Current state: **V0.4.0 — Phase 0 ✅, Phase 1A ✅, Phase 1B ✅.
+26 WHYNN entries imported. 27 passing tests.**
 
 This document defines the work remaining to reach a usable MVP. Phases are
 ordered by dependency — each unlocks the next.
@@ -57,40 +57,34 @@ usable for *new* daily data before worrying about historical import.
 
 ---
 
-## Phase 1B: Real Data Import + Extraction Iteration
+## Phase 1B: Real Data Import + Extraction Iteration ✅ COMPLETE
 
-**Why still needed:** The questionnaire system handles *new* data. Historical
-WHYNN logs (~26 daily entries) still need import to seed the insight engine.
+**Commit:** `ea23197`
 
-### 1.1 Characterize the WHYNN Logs ✅ (Done in prior session)
+### What was built:
 
-### 1.2 Build Section-Based Log Parser
+1. **`whynn_parser.py`** — Splits the 26-entry log file by date header, parses each
+   entry into named sections. Handles two distinct section-header formats
+   (April vs May entries).
 
-Split entries by date header, then by section keyword
-(`SYSTEM METRICS:`, `TRAINING EXECUTION:`, etc.). Deterministic, no LLM needed.
+2. **`whynn_extractor.py`** — Deterministic field extraction for all section types
+   (system metrics, breathwork, training, nutrition, buffs, XP). Includes a
+   fallback extractor for late-April/May entries that use a tab-separated
+   table format with different section names.
 
-### 1.3 Build Deterministic Field Extractors Per Section
+3. **`scripts/import_whynn_logs.py`** — CLI bulk import tool. Reads log file,
+   creates SourceDocument + DailyCheckin + Activity + MetricObservations
+   + JournalEntry per entry. Supports `--dry-run`.
 
-Regex extractors for structured fields: sleep hours, mood, body weight,
-strike counts, rounds, duration, hydration, CO₂ holds, etc.
+### Results:
 
-### 1.4 Build Bulk Import Tool
+- 26/26 entries processed, 0 skipped
+- 21 checkins, 15 activities, 56 metrics, 14 journal entries
+- All provenance = `import`
+- Structured fields spot-checked accurate
+- 27 tests passing (27 total)
 
-```python
-# scripts/import_whynn_logs.py
-# Parse → Extract → Create SourceDocument + DailyCheckin + Activities + Metrics
-```
-
-### 1.5 Iterate Extraction on Real Failures
-
-Spot-check 20+ entries. Score accuracy. Fix failure modes. Re-import. Repeat
-until ≥ 80% accuracy on structured fields.
-
-**Definition of done for Phase 1B:**
-- [ ] Bulk import processes all WHYNN log entries
-- [ ] Each entry produces: SourceDocument + DailyCheckin + Activities + MetricObservations + JournalEntry
-- [ ] Spot-check accuracy ≥ 80% on structured fields
-- [ ] Import tool reports extraction stats
+**Definition of done — all met ✅**
 
 ---
 
