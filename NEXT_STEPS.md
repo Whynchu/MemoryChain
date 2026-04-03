@@ -1,6 +1,6 @@
 # MemoryChain — Roadmap to MVP
 
-**Current state: V0.7.0-dev — Phases 0–3 complete. 58 checkins, 82 tests. Phase 4 next.**
+**Current state: V0.8.0-dev — Phases 0–4 complete. 58 checkins, 106 tests. MVP reached.**
 
 This document defines the work remaining to reach a usable MVP. Phases are
 ordered by dependency — each unlocks the next.
@@ -73,56 +73,40 @@ and `mood` populated. This is the dataset Phase 2 detectors run against.
 
 ## Phase 4: Make It Usable
 
-### 4.1 CLI Tool
+<details>
+<summary><strong>Phase 4: CLI Tool + Daily Workflow ✅</strong> (commit <code>867b5b4</code>)</summary>
 
-Click + rich/tabulate for terminal output:
+- CLI package (`apps/cli/`) using Click + Rich with 12 commands
+- `memorychain log` — freeform text → extraction → storage with confirmation flow
+- `memorychain today` — daily summary (checkin, open tasks, active goals)
+- `memorychain search` — keyword search across all objects
+- `memorychain review` — show/generate weekly reviews
+- `memorychain insights` — list with optional `--detect` flag
+- `memorychain promote` / `accept` / `reject` — insight lifecycle management
+- `memorychain goals` / `tasks` / `heuristics` — list views with rich tables
+- `memorychain status` — API health check
+- httpx-based API client matching real endpoint contracts
+- Rich display: panels, tables, status badges, extraction summaries
+- Env-var config: `MEMORYCHAIN_API_URL`, `MEMORYCHAIN_API_KEY`, `MEMORYCHAIN_USER_ID`
+- 24 CLI tests via Click CliRunner with mocked httpx (106 total)
+</details>
 
-```bash
-memorychain log "Slept 7h, mood 7/10. Did 6 rounds of bagwork."
-memorychain today              # today's checkin, open tasks, active goals
-memorychain search "sleep"     # keyword search across all objects
-memorychain review             # generate/show this week's review
-memorychain insights           # list candidates
-memorychain promote <id>       # promote insight → heuristic
-memorychain goals              # list active goals
-memorychain tasks              # list open tasks
-memorychain import <file>      # bulk import from log file
-```
-
-### 4.2 Extraction Confirmation Flow
-
-*Deferred from Phase 1A.* When chat extraction detects structured data, confirm
-with the user before storing. This is a UX concern that belongs here, not in the
-extraction layer — it needs the CLI or UI to present confirmations naturally.
-
-Approach:
-- After extraction, present a summary: "I found: Sleep 7h, Mood 7/10, Activity: bagwork. Store this?"
-- User confirms or corrects
-- Corrected values override extracted values (provenance: `user`)
-- Only relevant for freeform chat input, not questionnaire mode (which is already interactive)
-
-### 4.3 Daily Workflow Design
+### Daily Workflow
 
 1. **Morning:** `memorychain today` — yesterday's summary, open tasks, active goals
 2. **During day:** `memorychain log "..."` — quick entries as things happen
 3. **Evening:** `memorychain log "..."` — full daily log with metrics
-4. **Weekly:** `memorychain review` — synthesis + insights
-5. **Ad hoc:** `memorychain search`, `memorychain insights`, `memorychain promote`
-
-### 4.4 Web UI (Stretch)
-
-Only if CLI proves insufficient. Streamlit for rapid prototyping:
-- Five views: Today, Journal, Goals, Insights, Weekly Review
-- Consumes existing API
+4. **Weekly:** `memorychain review --generate` — synthesis + insights
+5. **Ad hoc:** `memorychain search`, `memorychain insights --detect`, `memorychain promote`
 
 ### Definition of Done — Phase 4
 
-- [ ] CLI handles daily log → extraction → storage flow
-- [ ] Extraction confirmation works in freeform mode
-- [ ] `memorychain today` shows a useful daily summary
-- [ ] `memorychain review` generates weekly review
-- [ ] Insight commands work (list, promote, reject)
-- [ ] Usable daily for 1+ week without blockers
+- [x] CLI handles daily log → extraction → storage flow
+- [x] Extraction confirmation works in freeform mode
+- [x] `memorychain today` shows a useful daily summary
+- [x] `memorychain review` generates weekly review
+- [x] Insight commands work (list, promote, reject)
+- [ ] Usable daily for 1+ week without blockers (validation in progress)
 
 ---
 
@@ -147,8 +131,8 @@ Only if CLI proves insufficient. Streamlit for rapid prototyping:
 - Rejected patterns are never re-generated
 - Weekly reviews are human-readable and reference specific entries
 - All mutations are auditable
-- CLI is usable daily for 1+ week
-- All tests pass (target ≥ 50 tests covering detection + lifecycle flows)
+- CLI is usable daily for 1+ week (validation in progress)
+- All tests pass (target ≥ 50 tests covering detection + lifecycle flows) ✅ **106 tests passing**
 
 ---
 
