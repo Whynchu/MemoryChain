@@ -491,6 +491,12 @@ class WeeklyReview(BaseModel):
     open_loops: list[str] = Field(default_factory=list)
     recommended_next_actions: list[str] = Field(default_factory=list)
     engagement_notes: list[str] = Field(default_factory=list)
+    insight_mentions: list[str] = Field(default_factory=list)
+    activity_summary: list[str] = Field(default_factory=list)
+    metric_highlights: list[str] = Field(default_factory=list)
+    sparse_data_flags: list[str] = Field(default_factory=list)
+    notable_entries: list[str] = Field(default_factory=list)
+    llm_narrative: str | None = None
     source_ids: list[str] = Field(default_factory=list)
     confidence: float | None = None
 

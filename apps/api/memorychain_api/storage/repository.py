@@ -1229,7 +1229,18 @@ class Repository:
         )
         self.conn.commit()
         row = self.conn.execute("SELECT * FROM insights WHERE id = ?", (insight_id,)).fetchone()
-        return self._row_to_insight(row)
+        insight = self._row_to_insight(row)
+        self._record_audit_log(
+            user_id=payload.user_id,
+            entity_type="insight",
+            entity_id=insight_id,
+            action="create",
+            before={},
+            after=insight.model_dump(mode="json"),
+            changed_fields=["title", "summary", "confidence", "status", "detector_key"],
+        )
+        self.conn.commit()
+        return insight
 
     def list_insights(self, user_id: str, status: str | None = None, limit: int = 100, offset: int = 0) -> list[Insight]:
         sql = "SELECT * FROM insights WHERE user_id = ?"
@@ -1317,7 +1328,18 @@ class Repository:
         )
         self.conn.commit()
         row = self.conn.execute("SELECT * FROM heuristics WHERE id = ?", (heuristic_id,)).fetchone()
-        return self._row_to_heuristic(row)
+        heuristic = self._row_to_heuristic(row)
+        self._record_audit_log(
+            user_id=payload.user_id,
+            entity_type="heuristic",
+            entity_id=heuristic_id,
+            action="create",
+            before={},
+            after=heuristic.model_dump(mode="json"),
+            changed_fields=["rule", "source_type", "confidence", "active", "insight_id"],
+        )
+        self.conn.commit()
+        return heuristic
 
     def list_heuristics(self, user_id: str, active_only: bool = False, limit: int = 100, offset: int = 0) -> list[Heuristic]:
         sql = "SELECT * FROM heuristics WHERE user_id = ?"
@@ -1770,6 +1792,46 @@ class Repository:
             [self._row_to_task(row) for row in tasks],
         )
 
+    def get_activities_for_week(
+        self, user_id: str, week_start: date, week_end: date
+    ) -> list[Activity]:
+        rows = self.conn.execute(
+            """
+            SELECT * FROM activities
+            WHERE user_id = ? AND date(effective_at) BETWEEN ? AND ?
+            ORDER BY effective_at ASC
+            """,
+            (user_id, week_start.isoformat(), week_end.isoformat()),
+        ).fetchall()
+        return [self._row_to_activity(row) for row in rows]
+
+    def get_metrics_for_week(
+        self, user_id: str, week_start: date, week_end: date
+    ) -> list[MetricObservation]:
+        rows = self.conn.execute(
+            """
+            SELECT * FROM metric_observations
+            WHERE user_id = ? AND date(effective_at) BETWEEN ? AND ?
+            ORDER BY effective_at ASC
+            """,
+            (user_id, week_start.isoformat(), week_end.isoformat()),
+        ).fetchall()
+        return [self._row_to_metric_observation(row) for row in rows]
+
+    def get_insights_for_week(
+        self, user_id: str, week_start: date, week_end: date
+    ) -> list[Insight]:
+        """Return insights created or updated during the given week."""
+        rows = self.conn.execute(
+            """
+            SELECT * FROM insights
+            WHERE user_id = ? AND date(created_at) BETWEEN ? AND ?
+            ORDER BY created_at ASC
+            """,
+            (user_id, week_start.isoformat(), week_end.isoformat()),
+        ).fetchall()
+        return [self._row_to_insight(row) for row in rows]
+
     def create_weekly_review(
         self,
         *,
@@ -1782,6 +1844,12 @@ class Repository:
         open_loops: list[str],
         recommended_next_actions: list[str],
         engagement_notes: list[str],
+        insight_mentions: list[str] | None = None,
+        activity_summary: list[str] | None = None,
+        metric_highlights: list[str] | None = None,
+        sparse_data_flags: list[str] | None = None,
+        notable_entries: list[str] | None = None,
+        llm_narrative: str | None = None,
         source_ids: list[str],
         confidence: float | None,
     ) -> WeeklyReview:
@@ -1792,8 +1860,12 @@ class Repository:
             INSERT INTO weekly_reviews (
                 id, user_id, created_at, week_start, week_end, summary,
                 wins_json, slips_json, open_loops_json,
-                recommended_next_actions_json, engagement_notes_json, source_ids_json, confidence
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                recommended_next_actions_json, engagement_notes_json,
+                insight_mentions_json, activity_summary_json,
+                metric_highlights_json, sparse_data_flags_json,
+                notable_entries_json, llm_narrative,
+                source_ids_json, confidence
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 review_id,
@@ -1807,6 +1879,12 @@ class Repository:
                 _to_json(open_loops),
                 _to_json(recommended_next_actions),
                 _to_json(engagement_notes),
+                _to_json(insight_mentions or []),
+                _to_json(activity_summary or []),
+                _to_json(metric_highlights or []),
+                _to_json(sparse_data_flags or []),
+                _to_json(notable_entries or []),
+                llm_narrative,
                 _to_json(source_ids),
                 confidence,
             ),
@@ -1915,6 +1993,12 @@ class Repository:
             open_loops=json.loads(row["open_loops_json"]),
             recommended_next_actions=json.loads(row["recommended_next_actions_json"]),
             engagement_notes=json.loads(row["engagement_notes_json"] or "[]"),
+            insight_mentions=json.loads(row["insight_mentions_json"] or "[]"),
+            activity_summary=json.loads(row["activity_summary_json"] or "[]"),
+            metric_highlights=json.loads(row["metric_highlights_json"] or "[]"),
+            sparse_data_flags=json.loads(row["sparse_data_flags_json"] or "[]"),
+            notable_entries=json.loads(row["notable_entries_json"] or "[]"),
+            llm_narrative=row["llm_narrative"],
             source_ids=json.loads(row["source_ids_json"]),
             confidence=row["confidence"],
         )

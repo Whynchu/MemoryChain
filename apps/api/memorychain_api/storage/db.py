@@ -350,6 +350,14 @@ def initialize(conn: sqlite3.Connection) -> None:
     _migrate_add_column(conn, "insights", "detector_key", "TEXT")
     _migrate_add_column(conn, "heuristics", "promotion_snapshot", "TEXT")
 
+    # Phase 3: enriched weekly reviews
+    _migrate_add_column(conn, "weekly_reviews", "insight_mentions_json", "TEXT NOT NULL DEFAULT '[]'")
+    _migrate_add_column(conn, "weekly_reviews", "activity_summary_json", "TEXT NOT NULL DEFAULT '[]'")
+    _migrate_add_column(conn, "weekly_reviews", "metric_highlights_json", "TEXT NOT NULL DEFAULT '[]'")
+    _migrate_add_column(conn, "weekly_reviews", "sparse_data_flags_json", "TEXT NOT NULL DEFAULT '[]'")
+    _migrate_add_column(conn, "weekly_reviews", "notable_entries_json", "TEXT NOT NULL DEFAULT '[]'")
+    _migrate_add_column(conn, "weekly_reviews", "llm_narrative", "TEXT")
+
     conn.commit()
 
 
