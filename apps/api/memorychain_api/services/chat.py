@@ -75,12 +75,6 @@ def _build_memory_context(repo: Repository, user_id: str, conversation_id: str) 
     else:
         context.append("No check-ins recorded yet — user is new")
 
-    # Recent conversation focus
-    recent_messages = repo.list_conversation_messages(conversation_id=conversation_id, limit=6, user_id=user_id)
-    user_messages = [m.content for m in recent_messages if m.role == "user"]
-    if user_messages:
-        context.append(f"Recent user focus: {user_messages[-1][:160]}")
-
     return context
 
 

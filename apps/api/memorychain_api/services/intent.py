@@ -60,6 +60,8 @@ _CHAT_PATTERNS = [
     re.compile(r"^(?:hey|hi|hello|yo|sup|thanks|thank you|ok|okay|cool|nice|great|bye|goodbye)\s*[!?.]*$", re.I),
     re.compile(r"^(?:what can you|how do you|help|what are you|who are you)", re.I),
     re.compile(r"^(?:yes|no|yep|nope|sure|maybe|alright)\s*[!?.]*$", re.I),
+    re.compile(r"\b(?:do|start|begin|let'?s|want to|wanna|gonna|should|ready for|time for)\s+(?:a\s+)?(?:checkin|check-in|check in|log)", re.I),
+    re.compile(r"\b(?:let'?s|want to|wanna|should we|can we|ready to)\s+(?:log|track|record|journal)", re.I),
 ]
 
 
@@ -67,11 +69,14 @@ def _classify_local(message: str) -> ClassificationResult:
     """Keyword-based classification when no LLM is available."""
     text = message.strip()
 
+    # Chat patterns (check before log — "let's do a checkin" is chat, not log)
+    for pat in _CHAT_PATTERNS:
+        if pat.search(text):
+            return ClassificationResult(intent="chat", confidence=0.9, reasoning="conversational or intent-to-start message")
+
     # Short messages with no data → chat
     if len(text) < 15:
-        for pat in _CHAT_PATTERNS:
-            if pat.search(text):
-                return ClassificationResult(intent="chat", confidence=0.9, reasoning="short conversational message")
+        pass  # fall through to pattern matching below
 
     # Check for strong log signals (numeric data)
     log_hits = sum(1 for pat in _LOG_PATTERNS if pat.search(text))
@@ -116,15 +121,21 @@ def _classify_llm(message: str) -> ClassificationResult | None:
     system_prompt = (
         "You are an intent classifier for a personal logging and memory system. "
         "Classify the user's message into exactly one of three categories:\n\n"
-        '- "log": The user is recording personal data, activities, metrics, moods, '
-        "sleep, goals, tasks, journal entries, or describing what they did/experienced. "
-        "They want this information STORED.\n\n"
+        '- "log": The user is providing ACTUAL personal data — numbers, metrics, '
+        "descriptions of what they did or experienced. Examples: 'slept 7h mood 8/10', "
+        "'ran 5k this morning', 'feeling anxious today, energy low'. "
+        "The message contains concrete data to STORE.\n\n"
         '- "query": The user is asking about their stored data, requesting summaries, '
         "looking up past entries, asking about trends or patterns, or wants to see "
         "their goals/tasks/insights. They want INFORMATION RETRIEVED.\n\n"
-        '- "chat": The user is making conversation, asking about the system itself, '
-        "saying hello/goodbye, giving feedback, or their message has no personal data "
-        "to store and no data to retrieve.\n\n"
+        '- "chat": The user is making conversation, expressing intent to begin a flow, '
+        "or their message has no concrete personal data. This includes greetings, "
+        "requests like 'let's do a checkin', 'I want to log something', 'we should "
+        "do a checkin', asking about the system, or any message without actual data "
+        "content. Wanting to START logging is chat, not log.\n\n"
+        "IMPORTANT: A message like 'let's do a checkin!' or 'we should log something' "
+        "is CHAT — the user is expressing intent to begin, not providing data. "
+        "LOG requires actual data content (numbers, metrics, narrative descriptions).\n\n"
         "Respond with ONLY a JSON object, no other text."
     )
 

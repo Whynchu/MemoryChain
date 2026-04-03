@@ -109,11 +109,6 @@ def run_setup(*, interactive: bool = True) -> bool:
 def check_and_prompt_setup() -> None:
     """Called on REPL launch — if not configured, offer to run setup."""
     if settings.is_configured():
-        # Already configured — show a brief account line
-        config = settings.load_config()
-        name = config.get("account_name", "")
-        if name:
-            console.print(f"  [dim]Account:[/dim] {name}")
         return
 
     console.print("[yellow]  ⚠ No OpenAI API key configured.[/yellow]")

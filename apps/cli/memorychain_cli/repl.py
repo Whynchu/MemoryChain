@@ -84,9 +84,11 @@ HELP_TEXT = """\
 # ── Branded Header ───────────────────────────────────────────
 
 _LOGO = r"""[bold cyan]
- ╔╦╗╔═╗╔╦╗╔═╗╦═╗╦ ╦  ╔═╗╦ ╦╔═╗╦╔╗╔
- ║║║║╣ ║║║║ ║╠╦╝╚╦╝  ║  ╠═╣╠═╣║║║║
- ╩ ╩╚═╝╩ ╩╚═╝╩╚═ ╩   ╚═╝╩ ╩╩ ╩╩╝╚╝[/bold cyan]"""
+ _____                       _____ _       _
+|     |___ _____ ___ ___ _ _|     | |_ ___|_|___
+| | | | -_|     | . |  _| | |   --|   | .'| |   |
+|_|_|_|___|_|_|_|___|_| |_  |_____|_|_|__,|_|_|_|
+                        |___|[/bold cyan]"""
 
 
 def _build_header() -> Panel:
@@ -286,7 +288,8 @@ def _handle_slash(line: str, conversation_id: str | None) -> str | None:
 def _handle_chat(text: str, conversation_id: str | None) -> str | None:
     """Send freeform text to the chat API. Returns updated conversation_id."""
     try:
-        data = client.post_chat(text, user_id=USER_ID, conversation_id=conversation_id)
+        with console.status("[dim]thinking…[/dim]", spinner="dots"):
+            data = client.post_chat(text, user_id=USER_ID, conversation_id=conversation_id)
         show_chat_response(data)
         return data.get("conversation_id", conversation_id)
     except httpx.ConnectError:
