@@ -13,9 +13,7 @@ from prompt_toolkit import PromptSession
 from prompt_toolkit.completion import WordCompleter
 from prompt_toolkit.formatted_text import HTML
 from prompt_toolkit.history import InMemoryHistory
-from rich.console import Console
 from rich.panel import Panel
-from rich.table import Table
 from rich.text import Text
 from rich import box
 
@@ -41,9 +39,11 @@ from .terminal import (
     get_cwd,
     get_short_cwd,
     detect_git,
-    get_terminal_width,
     get_account_display,
     get_data_dir,
+)
+from .theme import (
+    BLUE, BLUE_BRIGHT, BLUE_DIM, GREY_MID, GREY_DARK, GREEN, RED, PT_STYLE,
 )
 
 # Slash commands the completer knows about
@@ -53,79 +53,77 @@ SLASH_COMMANDS = [
     "/heuristics", "/status", "/help", "/clear", "/quit", "/exit",
 ]
 
-HELP_TEXT = """\
-[bold cyan]MemoryChain[/bold cyan] — interactive mode
+HELP_TEXT = f"""\
+[bold {BLUE}]MemoryChain[/bold {BLUE}] — interactive mode
 
 [bold]Just type naturally[/bold] to log entries, ask questions, or chat.
-  e.g. "Slept 7h, mood 8/10. Morning run 5k."
-  e.g. "How has my sleep been this week?"
-  e.g. "hey! what can you do?"
+  [{GREY_MID}]e.g. "Slept 7h, mood 8/10. Morning run 5k."[/{GREY_MID}]
+  [{GREY_MID}]e.g. "How has my sleep been this week?"[/{GREY_MID}]
+  [{GREY_MID}]e.g. "hey! what can you do?"[/{GREY_MID}]
 
 [bold]Slash commands:[/bold]
-  [green]/today[/green]            Today's checkin, tasks, goals
-  [green]/review[/green]           Show latest weekly review
-  [green]/review generate[/green]  Generate a new weekly review
-  [green]/search[/green] <query>   Search across all objects
-  [green]/insights[/green]         List insight candidates
-  [green]/detect[/green]           Run insight detectors
-  [green]/promote[/green] <id>     Promote insight → heuristic
-  [green]/accept[/green] <id>      Accept candidate → active
-  [green]/reject[/green] <id>      Reject an insight
-  [green]/goals[/green]            List active goals
-  [green]/tasks[/green]            List open tasks
-  [green]/heuristics[/green]       List learned heuristics
-  [green]/status[/green]           Check API connection
-  [green]/clear[/green]            Clear the screen
-  [green]/help[/green]             Show this help
-  [green]/quit[/green]             Exit
+  [{BLUE_BRIGHT}]/today[/{BLUE_BRIGHT}]            Today's checkin, tasks, goals
+  [{BLUE_BRIGHT}]/review[/{BLUE_BRIGHT}]           Show latest weekly review
+  [{BLUE_BRIGHT}]/review generate[/{BLUE_BRIGHT}]  Generate a new weekly review
+  [{BLUE_BRIGHT}]/search[/{BLUE_BRIGHT}] <query>   Search across all objects
+  [{BLUE_BRIGHT}]/insights[/{BLUE_BRIGHT}]         List insight candidates
+  [{BLUE_BRIGHT}]/detect[/{BLUE_BRIGHT}]           Run insight detectors
+  [{BLUE_BRIGHT}]/promote[/{BLUE_BRIGHT}] <id>     Promote insight → heuristic
+  [{BLUE_BRIGHT}]/accept[/{BLUE_BRIGHT}] <id>      Accept candidate → active
+  [{BLUE_BRIGHT}]/reject[/{BLUE_BRIGHT}] <id>      Reject an insight
+  [{BLUE_BRIGHT}]/goals[/{BLUE_BRIGHT}]            List active goals
+  [{BLUE_BRIGHT}]/tasks[/{BLUE_BRIGHT}]            List open tasks
+  [{BLUE_BRIGHT}]/heuristics[/{BLUE_BRIGHT}]       List learned heuristics
+  [{BLUE_BRIGHT}]/status[/{BLUE_BRIGHT}]           Check API connection
+  [{BLUE_BRIGHT}]/clear[/{BLUE_BRIGHT}]            Clear the screen
+  [{BLUE_BRIGHT}]/help[/{BLUE_BRIGHT}]             Show this help
+  [{BLUE_BRIGHT}]/quit[/{BLUE_BRIGHT}]             Exit
 
 """
 
 # ── Branded Header ───────────────────────────────────────────
 
-_LOGO = r"""[bold cyan]
+_LOGO = f"""[bold {BLUE}]
  _____                       _____ _       _
 |     |___ _____ ___ ___ _ _|     | |_ ___|_|___
 | | | | -_|     | . |  _| | |   --|   | .'| |   |
 |_|_|_|___|_|_|_|___|_| |_  |_____|_|_|__,|_|_|_|
-                        |___|[/bold cyan]"""
+                        |___|[/bold {BLUE}]"""
 
 
 def _build_header() -> Panel:
     """Build the branded header panel with status info."""
-    width = get_terminal_width()
-
     # Connection status
     try:
         client.health()
-        api_status = "[green]● connected[/green]"
+        api_status = f"[{GREEN}]● connected[/{GREEN}]"
     except Exception:
-        api_status = "[red]● offline[/red]"
+        api_status = f"[{RED}]● offline[/{RED}]"
 
     account = get_account_display()
-    account_display = f"[green]{account}[/green]" if account != "not configured" else "[yellow]{account}[/yellow]"
+    account_display = f"[{BLUE_BRIGHT}]{account}[/{BLUE_BRIGHT}]" if account != "not configured" else f"[{GREY_MID}]{account}[/{GREY_MID}]"
 
     # Git info
     git_info = detect_git()
-    git_display = f"[magenta] {git_info['branch']}[/magenta]" if git_info else ""
+    git_display = f"  [{GREY_MID}]{git_info['branch']}[/{GREY_MID}]" if git_info else ""
 
     # Build status lines
     cwd = get_cwd()
 
     header_text = Text.from_markup(
         f"{_LOGO}\n"
-        f"  [dim]v0.3.0[/dim]\n\n"
-        f"  [dim]API:[/dim]     {api_status}    [dim]Account:[/dim] {account_display}\n"
-        f"  [dim]Dir:[/dim]     [blue]{cwd}[/blue]{git_display}\n"
-        f"  [dim]Data:[/dim]    [dim]{get_data_dir()}[/dim]\n"
+        f"  [{GREY_MID}]v0.3.0[/{GREY_MID}]\n\n"
+        f"  [{GREY_MID}]API:[/{GREY_MID}]     {api_status}    [{GREY_MID}]Account:[/{GREY_MID}] {account_display}\n"
+        f"  [{GREY_MID}]Dir:[/{GREY_MID}]     [{BLUE_BRIGHT}]{cwd}[/{BLUE_BRIGHT}]{git_display}\n"
+        f"  [{GREY_MID}]Data:[/{GREY_MID}]    [{GREY_MID}]{get_data_dir()}[/{GREY_MID}]\n"
     )
 
     return Panel(
         header_text,
-        border_style="cyan",
+        border_style=BLUE_DIM,
         box=box.DOUBLE,
         padding=(0, 1),
-        subtitle="[dim]Type naturally to log • ask questions about your data • /help for commands[/dim]",
+        subtitle=f"[{GREY_MID}]Type naturally to log • ask questions • /help for commands[/{GREY_MID}]",
         subtitle_align="center",
     )
 
@@ -145,17 +143,17 @@ def _print_welcome() -> None:
 
 def _build_prompt() -> HTML:
     """Minimal prompt — just a chevron. Context lives in the bottom toolbar."""
-    return HTML("<ansigreen><b>›</b></ansigreen> ")
+    return HTML(f'<style fg="{BLUE}"><b>›</b></style> ')
 
 
 def _bottom_toolbar() -> HTML:
-    """Pinned bottom bar showing directory, git branch, and version."""
+    """Pinned bottom bar — dark background, subtle info."""
     short_path = get_short_cwd(max_parts=2)
     git = detect_git()
-    parts = [f"<ansicyan>{short_path}</ansicyan>"]
+    parts = [f'<style fg="{GREY_MID}">{short_path}</style>']
     if git:
-        parts.append(f"<ansimagenta>{git['branch']}</ansimagenta>")
-    parts.append("<ansigray>MemoryChain v0.3.0</ansigray>")
+        parts.append(f'<style fg="{GREY_MID}">{git["branch"]}</style>')
+    parts.append(f'<style fg="{GREY_DARK}">MemoryChain v0.3.0</style>')
     return HTML("  ".join(parts))
 
 
@@ -183,7 +181,7 @@ def _handle_slash(line: str, conversation_id: str | None) -> str | None:
                 today = date.today()
                 week_start = today - timedelta(days=today.weekday())
                 week_end = week_start + timedelta(days=6)
-                console.print("[dim]Generating weekly review…[/dim]")
+                console.print(f"[{GREY_MID}]Generating weekly review…[/{GREY_MID}]")
                 data = client.generate_review(
                     user_id=USER_ID,
                     week_start=week_start.isoformat(),
@@ -209,12 +207,12 @@ def _handle_slash(line: str, conversation_id: str | None) -> str | None:
             show_insights(data)
 
         elif cmd == "/detect":
-            console.print("[dim]Running insight detectors…[/dim]")
+            console.print(f"[{GREY_MID}]Running insight detectors…[/{GREY_MID}]")
             new = client.run_detectors(user_id=USER_ID)
             if new:
-                console.print(f"[green]  ✓ {len(new)} new insight(s) detected.[/green]\n")
+                console.print(f"[{GREEN}]  ✓ {len(new)} new insight(s) detected.[/{GREEN}]\n")
             else:
-                console.print("[dim]  No new insights detected.[/dim]\n")
+                console.print(f"[{GREY_MID}]  No new insights detected.[/{GREY_MID}]\n")
             data = client.list_insights(status="candidate")
             if data:
                 show_insights(data)
@@ -254,19 +252,19 @@ def _handle_slash(line: str, conversation_id: str | None) -> str | None:
             show_heuristics(data)
 
         elif cmd == "/status":
-            console.print(f"  [dim]API:[/dim]     {API_BASE_URL}")
+            console.print(f"  [{GREY_MID}]API:[/{GREY_MID}]     {API_BASE_URL}")
             try:
                 data = client.health()
-                console.print(f"  [green]●[/green] API is {data.get('status', 'unknown')}")
+                console.print(f"  [{GREEN}]●[/{GREEN}] API is {data.get('status', 'unknown')}")
             except Exception:
-                console.print("  [red]●[/red] Cannot connect to API")
-            console.print(f"  [dim]Account:[/dim] {get_account_display()}")
-            console.print(f"  [dim]User:[/dim]    {USER_ID}")
-            console.print(f"  [dim]Dir:[/dim]     {get_cwd()}")
+                console.print(f"  [{RED}]●[/{RED}] Cannot connect to API")
+            console.print(f"  [{GREY_MID}]Account:[/{GREY_MID}] {get_account_display()}")
+            console.print(f"  [{GREY_MID}]User:[/{GREY_MID}]    {USER_ID}")
+            console.print(f"  [{GREY_MID}]Dir:[/{GREY_MID}]     {get_cwd()}")
             git = detect_git()
             if git:
-                console.print(f"  [dim]Git:[/dim]     [magenta]{git['branch']}[/magenta]")
-            console.print(f"  [dim]Data:[/dim]    {get_data_dir()}")
+                console.print(f"  [{GREY_MID}]Git:[/{GREY_MID}]     [{GREY_MID}]{git['branch']}[/{GREY_MID}]")
+            console.print(f"  [{GREY_MID}]Data:[/{GREY_MID}]    {get_data_dir()}")
 
         elif cmd == "/clear":
             clear_screen()
@@ -313,6 +311,7 @@ def run_repl() -> None:
         completer=completer,
         complete_while_typing=True,
         bottom_toolbar=_bottom_toolbar,
+        style=PT_STYLE,
     )
 
     conversation_id: str | None = None
@@ -343,9 +342,9 @@ def _exit_gracefully() -> None:
     console.print()
     console.print(
         Panel(
-            "[dim]Session ended. Your data is saved in[/dim] "
-            f"[blue]{get_data_dir()}[/blue]",
-            border_style="dim",
+            f"[{GREY_MID}]Session ended. Your data is saved in[/{GREY_MID}] "
+            f"[{BLUE_BRIGHT}]{get_data_dir()}[/{BLUE_BRIGHT}]",
+            border_style=GREY_DARK,
             padding=(0, 1),
         )
     )

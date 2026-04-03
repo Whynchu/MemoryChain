@@ -10,8 +10,10 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-console = Console()
-err_console = Console(stderr=True)
+from .theme import RICH_THEME, BLUE, BLUE_BRIGHT, GREY_MID, GREEN, RED, YELLOW
+
+console = Console(theme=RICH_THEME)
+err_console = Console(stderr=True, theme=RICH_THEME)
 
 
 # ── Utilities ────────────────────────────────────────────────
@@ -38,15 +40,15 @@ def _date_fmt(iso: str | None) -> str:
 
 def status_badge(status: str) -> Text:
     colors = {
-        "active": "green",
-        "candidate": "yellow",
-        "rejected": "red",
+        "active": GREEN,
+        "candidate": YELLOW,
+        "rejected": RED,
         "archived": "dim",
-        "promoted": "bold cyan",
-        "completed": "green",
-        "in_progress": "yellow",
+        "promoted": f"bold {BLUE_BRIGHT}",
+        "completed": GREEN,
+        "in_progress": YELLOW,
         "not_started": "dim",
-        "open": "yellow",
+        "open": YELLOW,
         "closed": "dim",
     }
     color = colors.get(status, "white")
@@ -59,7 +61,7 @@ def show_chat_response(data: dict[str, Any]) -> None:
     extraction = data.get("extraction", {})
 
     console.print()
-    console.print(Panel(reply, title="[bold]MemoryChain[/bold]", border_style="blue"))
+    console.print(Panel(reply, border_style=BLUE, padding=(1, 2)))
 
     # Only show extraction details if something was actually stored
     if extraction:
@@ -86,12 +88,12 @@ def show_chat_response(data: dict[str, Any]) -> None:
 
 def _extraction_line(label: str, obj_id: str | None) -> None:
     if obj_id:
-        console.print(f"  [bold green]✓[/bold green] {label}: {_short_id(obj_id)}")
+        console.print(f"  [{BLUE_BRIGHT}]✓[/{BLUE_BRIGHT}] [{GREY_MID}]{label}:[/{GREY_MID}] {_short_id(obj_id)}")
 
 
 def _extraction_list(label: str, ids: list[str]) -> None:
     if ids:
-        console.print(f"  [bold green]✓[/bold green] {len(ids)} {label}: {', '.join(_short_id(i) for i in ids)}")
+        console.print(f"  [{BLUE_BRIGHT}]✓[/{BLUE_BRIGHT}] [{GREY_MID}]{len(ids)} {label}:[/{GREY_MID}] {', '.join(_short_id(i) for i in ids)}")
 
 
 # ── Today ────────────────────────────────────────────────────
@@ -112,9 +114,9 @@ def show_today(checkins: list, tasks: list, goals: list) -> None:
         )
         if notes:
             ci_text += f"\n{_trunc(notes, 200)}"
-        console.print(Panel(ci_text, title="📋 Today's Check-in", border_style="cyan"))
+        console.print(Panel(ci_text, title=f"[{BLUE_BRIGHT}]📋 Today's Check-in[/{BLUE_BRIGHT}]", border_style=BLUE))
     else:
-        console.print(Panel("[dim]No check-in recorded today.[/dim]", title="📋 Today's Check-in", border_style="dim"))
+        console.print(Panel(f"[{GREY_MID}]No check-in recorded today.[/{GREY_MID}]", title=f"[{GREY_MID}]📋 Today's Check-in[/{GREY_MID}]", border_style=GREY_MID))
 
     # Tasks
     open_tasks = [t for t in tasks if t.get("status") not in ("completed", "cancelled")]
@@ -164,7 +166,7 @@ def show_search_results(data: dict[str, Any], query: str) -> None:
         console.print()
         return
 
-    console.print(f"[bold]{len(results)} result(s)[/bold] for [cyan]'{query}'[/cyan]\n")
+    console.print(f"[bold]{len(results)} result(s)[/bold] for [{BLUE_BRIGHT}]'{query}'[/{BLUE_BRIGHT}]\n")
     for r in results:
         obj_type = r.get("object_type", "unknown")
         title = r.get("title") or r.get("snippet", "—")
@@ -182,7 +184,7 @@ def show_review(review: dict[str, Any]) -> None:
     summary = review.get("summary", "No summary available.")
     narrative = review.get("llm_narrative", "")
 
-    console.print(Panel(summary, title=f"📊 Weekly Review — {week}", border_style="green"))
+    console.print(Panel(summary, title=f"[{BLUE_BRIGHT}]📊 Weekly Review — {week}[/{BLUE_BRIGHT}]", border_style=BLUE))
 
     # Wins & Slips
     wins = review.get("wins", [])
@@ -249,7 +251,7 @@ def show_review(review: dict[str, Any]) -> None:
     # LLM narrative
     if narrative:
         console.print()
-        console.print(Panel(narrative, title="🤖 AI Narrative", border_style="magenta"))
+        console.print(Panel(narrative, title=f"[{BLUE_BRIGHT}]🤖 AI Narrative[/{BLUE_BRIGHT}]", border_style=BLUE))
 
     console.print()
 
