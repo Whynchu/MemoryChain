@@ -10,7 +10,9 @@ from ..schemas import (
 )
 from ..storage.repository import Repository
 from .extraction import extract_objects, is_substantive
-from .llm import generate_chat_reply
+from .intent import classify_intent
+from .llm import generate_chat_reply, generate_log_reply, generate_query_reply
+from .query_handler import handle_query
 from .questionnaire import QuestionnaireService, is_questionnaire_command
 
 
@@ -151,7 +153,38 @@ def handle_chat(repo: Repository, payload: ChatRequest) -> ChatResponse:
             # Template not found - fall through to normal chat
             pass
 
-    # Normal chat processing (existing logic)
+    # ── Phase 5: Intent-aware routing ──────────────────────
+    classification = classify_intent(payload.message)
+
+    # Store user message in conversation history (always, for all intents)
+    repo.append_conversation_message(
+        conversation_id=conversation.id,
+        user_id=payload.user_id,
+        role="user",
+        content=payload.message,
+    )
+
+    history = repo.list_conversation_messages(conversation_id=conversation.id, limit=10, user_id=payload.user_id)
+    history_lines = [f"{msg.role}: {msg.content}" for msg in history]
+    memory_context = _build_memory_context(repo, payload.user_id, conversation.id)
+
+    if classification.intent == "log":
+        return _handle_log(repo, payload, conversation, now, memory_context, history_lines)
+    elif classification.intent == "query":
+        return _handle_query(repo, payload, conversation, memory_context, history_lines)
+    else:
+        return _handle_chat(repo, payload, conversation, memory_context, history_lines)
+
+
+def _handle_log(
+    repo: Repository,
+    payload: ChatRequest,
+    conversation,
+    now,
+    memory_context: list[str],
+    history_lines: list[str],
+) -> ChatResponse:
+    """LOG intent: extract data, store everything, confirm what was stored."""
     source = repo.create_source_document(
         SourceDocumentCreate(
             user_id=payload.user_id,
@@ -163,15 +196,14 @@ def handle_chat(repo: Repository, payload: ChatRequest) -> ChatResponse:
         )
     )
 
-    # Use shared extraction service with hybrid LLM+regex extraction
     extraction = extract_objects(
         raw_text=payload.message,
         source_document_id=source.id,
         user_id=payload.user_id,
         effective_at=now,
-        create_journal=True,  # extraction service checks is_substantive internally
+        create_journal=True,
         provenance="user",
-        provider="hybrid",  # Use LLM+regex for better extraction
+        provider="hybrid",
     )
 
     journal = repo.create_journal_entry(extraction.journal_entry) if extraction.journal_entry else None
@@ -181,21 +213,31 @@ def handle_chat(repo: Repository, payload: ChatRequest) -> ChatResponse:
     activities = [repo.create_activity(a) for a in extraction.activities]
     metrics = [repo.create_metric_observation(m) for m in extraction.metrics]
 
-    repo.append_conversation_message(
-        conversation_id=conversation.id,
-        user_id=payload.user_id,
-        role="user",
-        content=payload.message,
-        source_document_id=source.id,
-    )
+    # Build extraction summary for reply generation
+    extraction_summary = []
+    if checkin:
+        parts = []
+        if checkin.sleep_hours is not None:
+            parts.append(f"sleep {checkin.sleep_hours}h")
+        if checkin.mood is not None:
+            parts.append(f"mood {checkin.mood}/10")
+        if checkin.energy is not None:
+            parts.append(f"energy {checkin.energy}/10")
+        if parts:
+            extraction_summary.append(f"Check-in: {', '.join(parts)}")
+    if journal:
+        extraction_summary.append(f"Journal entry recorded")
+    for g in goals:
+        extraction_summary.append(f"Goal: {g.title}")
+    for t in tasks:
+        extraction_summary.append(f"Task: {t.title}")
+    for a in activities:
+        extraction_summary.append(f"Activity: {a.title}")
 
-    history = repo.list_conversation_messages(conversation_id=conversation.id, limit=10, user_id=payload.user_id)
-    history_lines = [f"{msg.role}: {msg.content}" for msg in history]
-    memory_context = _build_memory_context(repo, payload.user_id, conversation.id)
-
-    assistant_text = generate_chat_reply(
+    assistant_text = generate_log_reply(
         user_message=payload.message,
         memory_context=memory_context,
+        extraction_summary=extraction_summary,
         history_lines=history_lines,
     )
 
@@ -219,5 +261,72 @@ def handle_chat(repo: Repository, payload: ChatRequest) -> ChatResponse:
             activity_ids=[a.id for a in activities],
             metric_ids=[m.id for m in metrics],
         ),
+        memory_context=memory_context,
+    )
+
+
+def _handle_query(
+    repo: Repository,
+    payload: ChatRequest,
+    conversation,
+    memory_context: list[str],
+    history_lines: list[str],
+) -> ChatResponse:
+    """QUERY intent: retrieve data, respond with real numbers. No storage."""
+    results = handle_query(repo, payload.user_id, payload.message)
+
+    query_context = []
+    for r in results:
+        query_context.append(r.summary)
+        query_context.extend(r.data_lines)
+
+    assistant_text = generate_query_reply(
+        user_message=payload.message,
+        query_context=query_context,
+        history_lines=history_lines,
+    )
+
+    assistant_msg = repo.append_conversation_message(
+        conversation_id=conversation.id,
+        user_id=payload.user_id,
+        role="assistant",
+        content=assistant_text,
+    )
+
+    return ChatResponse(
+        conversation_id=conversation.id,
+        assistant_message=assistant_text,
+        assistant_message_id=assistant_msg.id,
+        extraction=ExtractionSummary(),
+        memory_context=memory_context,
+    )
+
+
+def _handle_chat(
+    repo: Repository,
+    payload: ChatRequest,
+    conversation,
+    memory_context: list[str],
+    history_lines: list[str],
+) -> ChatResponse:
+    """CHAT intent: conversational reply. No extraction, no storage."""
+    assistant_text = generate_chat_reply(
+        user_message=payload.message,
+        memory_context=memory_context,
+        history_lines=history_lines,
+    )
+
+    assistant_msg = repo.append_conversation_message(
+        conversation_id=conversation.id,
+        user_id=payload.user_id,
+        role="assistant",
+        content=assistant_text,
+    )
+
+    return ChatResponse(
+        conversation_id=conversation.id,
+        assistant_message=assistant_text,
+        assistant_message_id=assistant_msg.id,
+        extraction=ExtractionSummary(),
         memory_context=memory_context,
     )

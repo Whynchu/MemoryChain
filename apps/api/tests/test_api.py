@@ -77,10 +77,7 @@ def test_search_tag_and_date_filters() -> None:
     chat_response = client.post(
         "/api/v1/chat",
         headers=AUTH,
-        json={
-            "user_id": user_id,
-            "message": "journal: today I did a detailed log with tags via the chat pipeline for testing purposes",
-        },
+        json={"user_id": user_id, "message": "Slept 7h, mood 8/10. Did a detailed log with tags via the chat pipeline for testing purposes"},
     )
     assert chat_response.status_code == 200
 
@@ -202,7 +199,7 @@ def test_prompt_cycle_lifecycle() -> None:
     seed = client.post(
         "/api/v1/chat",
         headers=AUTH,
-        json={"user_id": user_id, "message": "seed source for prompt response"},
+        json={"user_id": user_id, "message": "Slept 8h, mood 7/10. Seed source for prompt response"},
     )
     assert seed.status_code == 200
     source_id = seed.json()["extraction"]["source_document_id"]
@@ -298,7 +295,7 @@ def test_engagement_summary_metrics() -> None:
     seed = client.post(
         "/api/v1/chat",
         headers=AUTH,
-        json={"user_id": user_id, "message": "seed source for engagement summary"},
+        json={"user_id": user_id, "message": "Slept 6h, mood 9/10. Seed source for engagement summary"},
     )
     assert seed.status_code == 200
     source_id = seed.json()["extraction"]["source_document_id"]

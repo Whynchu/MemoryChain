@@ -526,7 +526,7 @@ class ChatRequest(BaseModel):
 
 
 class ExtractionSummary(BaseModel):
-    source_document_id: str
+    source_document_id: str | None = None
     journal_entry_id: str | None = None
     checkin_id: str | None = None
     task_ids: list[str] = Field(default_factory=list)
