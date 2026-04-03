@@ -1,0 +1,14 @@
+pyproject.toml
+memorychain_cli/__init__.py
+memorychain_cli/client.py
+memorychain_cli/config.py
+memorychain_cli/display.py
+memorychain_cli/main.py
+memorychain_cli.egg-info/PKG-INFO
+memorychain_cli.egg-info/SOURCES.txt
+memorychain_cli.egg-info/dependency_links.txt
+memorychain_cli.egg-info/entry_points.txt
+memorychain_cli.egg-info/requires.txt
+memorychain_cli.egg-info/top_level.txt
+memorychain_cli/commands/__init__.py
+tests/test_cli.py

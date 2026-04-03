@@ -1,0 +1,2 @@
+[console_scripts]
+memorychain = memorychain_cli.main:cli

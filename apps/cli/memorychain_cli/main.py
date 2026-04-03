@@ -35,7 +35,7 @@ from .display import (
 
 
 @click.group(invoke_without_command=True)
-@click.version_option("0.2.0", prog_name="memorychain")
+@click.version_option("0.3.0", prog_name="memorychain")
 @click.pass_context
 def cli(ctx: click.Context) -> None:
     """MemoryChain — personal memory and execution backend."""

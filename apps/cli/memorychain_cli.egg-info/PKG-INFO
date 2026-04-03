@@ -1,0 +1,11 @@
+Metadata-Version: 2.4
+Name: memorychain-cli
+Version: 0.2.0
+Summary: MemoryChain CLI — daily logging, review, and insight management from the terminal
+Requires-Python: >=3.11
+Requires-Dist: click<9.0.0,>=8.1.0
+Requires-Dist: httpx<1.0.0,>=0.24.0
+Requires-Dist: rich<14.0.0,>=13.0.0
+Requires-Dist: prompt-toolkit<4.0.0,>=3.0.0
+Provides-Extra: dev
+Requires-Dist: pytest<9.0.0,>=8.0.0; extra == "dev"

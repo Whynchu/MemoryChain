@@ -61,18 +61,26 @@ def show_chat_response(data: dict[str, Any]) -> None:
     console.print()
     console.print(Panel(reply, title="[bold]MemoryChain[/bold]", border_style="blue"))
 
+    # Only show extraction details if something was actually stored
     if extraction:
-        console.print()
-        # Show extracted object IDs grouped by type
-        _extraction_line("Source Document", extraction.get("source_document_id"))
-        _extraction_line("Journal Entry", extraction.get("journal_entry_id"))
-        _extraction_line("Check-in", extraction.get("checkin_id"))
-        _extraction_list("Tasks", extraction.get("task_ids", []))
-        _extraction_list("Goals", extraction.get("goal_ids", []))
-        _extraction_list("Activities", extraction.get("activity_ids", []))
-        _extraction_list("Metrics", extraction.get("metric_ids", []))
-    else:
-        console.print("  [dim]No structured data extracted.[/dim]")
+        has_data = (
+            extraction.get("source_document_id")
+            or extraction.get("journal_entry_id")
+            or extraction.get("checkin_id")
+            or extraction.get("task_ids")
+            or extraction.get("goal_ids")
+            or extraction.get("activity_ids")
+            or extraction.get("metric_ids")
+        )
+        if has_data:
+            console.print()
+            _extraction_line("Source Document", extraction.get("source_document_id"))
+            _extraction_line("Journal Entry", extraction.get("journal_entry_id"))
+            _extraction_line("Check-in", extraction.get("checkin_id"))
+            _extraction_list("Tasks", extraction.get("task_ids", []))
+            _extraction_list("Goals", extraction.get("goal_ids", []))
+            _extraction_list("Activities", extraction.get("activity_ids", []))
+            _extraction_list("Metrics", extraction.get("metric_ids", []))
     console.print()
 
 
