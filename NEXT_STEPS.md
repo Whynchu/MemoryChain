@@ -1,265 +1,297 @@
 # MemoryChain — Roadmap to MVP
 
-Current state: **V0.4.0 — Phase 0 ✅, Phase 1A ✅, Phase 1B ✅.
-26 WHYNN entries imported. 27 passing tests.**
+**Current state: V0.5.0-dev — Phases 0–1 complete. 58 checkins, 47 tests. Phase 2 next.**
 
 This document defines the work remaining to reach a usable MVP. Phases are
 ordered by dependency — each unlocks the next.
 
 ---
 
-## Phase 0: Foundation Fixes ✅ COMPLETE
+## Completed Work
 
-All items delivered in commit `f114cb3`:
+<details>
+<summary><strong>Phase 0: Foundation Fixes ✅</strong> (commit <code>f114cb3</code>)</summary>
+
 - 6 new tables (activities, metric_observations, protocols, protocol_executions, insights, heuristics)
 - Provenance column on all tables
 - Transaction safety for multi-step writes
 - Substantive-message filtering for journal entries
 - FTS5 search index
 - Shared extraction service (`services/extraction.py`)
-- 16 passing tests
+</details>
+
+<details>
+<summary><strong>Phase 1A: Conversational Questionnaires + Hybrid Extraction ✅</strong> (commit <code>66764f4</code>)</summary>
+
+- Questionnaire system — template-driven Q&A via `/morning`, `/checkin`, `/training`
+- Natural language answer parser (numeric, scale, boolean, choice, text)
+- Hybrid LLM extraction (GPT-4o-mini + regex fallback)
+- Provenance plumbing through all Create schemas
+</details>
+
+<details>
+<summary><strong>Phase 1B: Real Data Import ✅</strong> (commit <code>ea23197</code>)</summary>
+
+- WHYNN log parser + field extractors (two format variants)
+- Bulk import script (`scripts/import_whynn_logs.py`)
+- 26/26 entries → 21 checkins, 15 activities, 56 metrics, 14 journal entries
+- All provenance = `import`, structured fields spot-checked accurate
+</details>
+
+**Data baseline:** 58 daily checkins in the database, all with both `sleep_hours`
+and `mood` populated. This is the dataset Phase 2 detectors run against.
 
 ---
 
-## Phase 1A: Conversational Questionnaires + Hybrid Extraction ✅ COMPLETE
+## Phase 2: Insight Detection Engine
 
-**Context:** After analyzing the WHYNN logs, the approach pivoted from bulk log
-import to building a conversational input pipeline first — the system should be
-usable for *new* daily data before worrying about historical import.
+**Goal:** Prove the observation → interpretation → rule pipeline works end-to-end
+with one real detector, then make the lifecycle (promote, reject, re-detect)
+bulletproof before adding more detectors.
 
-### What was built:
+### 2.1 Schema Evolution
 
-1. **Questionnaire system** — Template-driven conversational data collection
-   - Schema: `questionnaire_templates` + `questionnaire_sessions` tables
-   - Pydantic models: `QuestionDef`, `QuestionnaireTemplate`, `QuestionnaireSession`
-   - Full CRUD repository methods
-   - REST endpoints: `POST/GET /api/v1/questionnaires/templates`
+Before writing detection logic, add the infrastructure that makes insights
+manageable:
 
-2. **Natural language answer parser** (`services/answer_parser.py`)
-   - Handles: numeric ("7 hours", "~140"), scale ("8/10"), boolean, choice, text
-   - Word-to-number conversion, approximate value handling
+**Add `detector_key` column to `insights` table:**
 
-3. **Chat-questionnaire integration** (`services/questionnaire.py`)
-   - `/morning`, `/checkin`, `/training` commands start questionnaire sessions
-   - Active sessions intercept chat flow — answers are parsed, not extracted
-   - On completion: creates DailyCheckin, Activity, or MetricObservation records
+```sql
+ALTER TABLE insights ADD COLUMN detector_key TEXT;
+-- e.g., "sleep_mood_v1", "training_energy_v1"
+```
 
-4. **LLM extraction upgrade** (`services/extraction.py`)
-   - Three modes: `regex` (default), `llm` (OpenAI), `hybrid` (LLM + regex fallback)
-   - Chat now uses `hybrid` mode
-   - GPT-4o-mini for structured extraction, regex fallback when no API key
+This is how we fingerprint insights for dedup and rejection tracking. Without
+it, the system can't know "I already generated (or the user rejected) this
+type of insight" — it would blindly re-create rejected patterns.
 
-5. **Provenance plumbing** — All Create schemas now carry provenance through to
-   the database. LLM-extracted and questionnaire-sourced data is tagged
-   `system_extracted` for data lineage tracking.
+**Add `promotion_snapshot` column to `heuristics` table:**
 
-### 19 tests passing (16 original + 3 new)
+```sql
+ALTER TABLE heuristics ADD COLUMN promotion_snapshot TEXT;
+-- JSON blob: thresholds applied, values at promotion time
+```
 
----
+When a heuristic is promoted, record *why it qualified* — the thresholds used,
+the evidence counts, the correlation values. The audit trail should say "promoted
+because r=0.72, n=14, span=28 days" not just "promoted."
 
-## Phase 1B: Real Data Import + Extraction Iteration ✅ COMPLETE
+### 2.2 Sleep-Mood Correlation Detector
 
-**Commit:** `ea23197`
+**Why this one first:** It needs exactly two numeric fields (`sleep_hours`,
+`mood`) that we have 100% coverage on. The correlation is meaningful and
+personally actionable.
 
-### What was built:
+**Algorithm — statistically grounded, not bucket-hacking:**
 
-1. **`whynn_parser.py`** — Splits the 26-entry log file by date header, parses each
-   entry into named sections. Handles two distinct section-header formats
-   (April vs May entries).
+1. Query checkins where both `sleep_hours` and `mood` are non-null
+2. If fewer than 7 data points → skip (insufficient for correlation)
+3. Compute **Pearson correlation coefficient** (r) between sleep_hours and mood
+4. If |r| < 0.3 → no meaningful correlation → skip
+5. Compute **descriptive group stats** for the human-readable summary:
+   - Split at median sleep hours (data-driven, not a magic 6h cutoff)
+   - Report mean mood for each group
+6. Map r → `confidence`:
+   - |r| 0.3–0.5 → confidence 0.4–0.6 (moderate)
+   - |r| 0.5–0.7 → confidence 0.6–0.8 (strong)
+   - |r| > 0.7 → confidence 0.8–0.95 (very strong)
+7. Check for existing insight with same `detector_key` + `user_id`:
+   - If active/candidate exists → update if data changed significantly, else skip
+   - If rejected exists → do not re-create (respect user's judgment)
+8. Create candidate Insight with evidence_ids pointing to the checkin IDs used
 
-2. **`whynn_extractor.py`** — Deterministic field extraction for all section types
-   (system metrics, breathwork, training, nutrition, buffs, XP). Includes a
-   fallback extractor for late-April/May entries that use a tab-separated
-   table format with different section names.
-
-3. **`scripts/import_whynn_logs.py`** — CLI bulk import tool. Reads log file,
-   creates SourceDocument + DailyCheckin + Activity + MetricObservations
-   + JournalEntry per entry. Supports `--dry-run`.
-
-### Results:
-
-- 26/26 entries processed, 0 skipped
-- 21 checkins, 15 activities, 56 metrics, 14 journal entries
-- All provenance = `import`
-- Structured fields spot-checked accurate
-- 27 tests passing (27 total)
-
-**Definition of done — all met ✅**
-
----
-
-## Phase 2: One Insight Detector, Done Right (Weeks 4–5)
-
-**Why one, not many?** The previous plan called for a general-purpose insight
-engine. That's a research project disguised as an engineering task. Start with
-one concrete detector that proves the architecture, then generalize.
-
-### 2.1 Sleep-Mood Correlation Detector
-
-**The simplest meaningful insight:** "When you sleep less than X hours, your
-mood averages Y points lower."
-
-This only needs two fields from DailyCheckin: `sleep_hours` and `mood`. Both
-are numeric. The correlation is straightforward to compute.
-
-**Algorithm:**
-1. Query DailyCheckins for the past 60 days where both `sleep_hours` and `mood` are non-null
-2. If fewer than 5 data points, skip (insufficient evidence)
-3. Split into two groups: sleep < 6h and sleep ≥ 6h
-4. Compare average mood between groups
-5. If difference ≥ 1.5 points and each group has ≥ 2 entries → create candidate Insight
+**Why Pearson instead of bucket comparison:**
+- Uses all data points instead of discarding information via arbitrary grouping
+- Produces a real correlation coefficient that maps to `confidence` naturally
+- Still generates plain-language summaries ("on low-sleep days, mood averaged X
+  vs Y") but the *detection* is principled
+- ~5 extra lines of code (stdlib `statistics` module)
 
 **Output:**
 ```json
 {
-  "title": "Low sleep correlates with lower mood",
-  "summary": "On days with <6h sleep, your mood averaged 4.2/10 vs 7.1/10 on days with ≥6h sleep (based on 12 entries over 30 days).",
-  "confidence": 0.72,
+  "detector_key": "sleep_mood_v1",
+  "title": "Sleep duration correlates with mood",
+  "summary": "Your sleep and mood are moderately correlated (r=0.58). On days with <6.5h sleep, mood averaged 4.8/10 vs 7.2/10 on days with ≥6.5h (n=58, 30-day window).",
+  "confidence": 0.65,
   "status": "candidate",
-  "evidence_ids": ["dc_abc123", "dc_def456", ...],
+  "evidence_ids": ["dc_xxx", ...],
   "time_window_start": "2025-04-07",
   "time_window_end": "2025-05-02"
 }
 ```
 
-### 2.2 Build the Insight Creation Flow
+### 2.3 Detection Service & Endpoint
 
-- New service: `services/insights.py` with `detect_sleep_mood_insight()`
-- Stores result in the `insights` table
-- Endpoint: `POST /api/v1/insights/detect` (triggers detection manually)
-- Also triggered by weekly review generation
-- Returns created insights with evidence links
+**New file: `services/insight_detection.py`**
 
-### 2.3 Build Heuristic Promotion
-
-Once an Insight exists and has been reviewed:
-- Endpoint: `POST /api/v1/insights/{id}/promote`
-- Validates promotion thresholds:
-  - ≥ 5 supporting observations
-  - Pattern spans ≥ 3 weeks
-  - Counter-evidence ratio ≤ 1:3
-  - **Requires explicit user confirmation** (never auto-promoted)
-- If valid → creates Heuristic, links back to Insight
-- If invalid → returns 409 with explanation of what's missing
-
-### 2.4 Build Insight Rejection
-
-- Endpoint: `PUT /api/v1/insights/{id}/status` (accept, reject, archive)
-- When rejected, store rejection reason
-- Track rejected patterns to avoid re-generating similar insights
-- Audit log records the rejection
-
-### 2.5 Add a Second Detector (If Time Permits)
-
-Only after sleep-mood works end-to-end, consider adding:
-- **Training volume vs. energy** (high strike count days → next day energy)
-- **Adherence decay** (missed prompt cycles correlate with fewer journal entries)
-
-Each detector is a separate function, not a generalized engine. Generalize
-only after you have 3+ working detectors and see the common patterns.
-
-**Definition of done for Phase 2:**
-- [ ] Sleep-mood insight detector runs against imported WHYNN data
-- [ ] Produces at least 1 meaningful insight from the real dataset
-- [ ] User can promote Insight → Heuristic (with threshold validation)
-- [ ] User can reject an Insight (with reason, audit trail)
-- [ ] Rejected patterns are not re-generated
-- [ ] Tests cover: detection, promotion (success + failure), rejection
-
----
-
-## Phase 3: Weekly Review + LLM Polish (Week 6)
-
-### 3.1 Improve Weekly Review Generation
-
-Current state: deterministic aggregation that reads like a database report.
-
-**Improvements:**
-- Include top insights (if any) in the review
-- Include Activity summaries (total training sessions, strike counts, etc.)
-- Reference specific entries ("On April 12, you noted...")
-- Add "areas to investigate" (sparse data days, pattern breaks)
-
-### 3.2 Add LLM Summary Layer
-
-After computing the structured facts, pass them to the LLM:
-
-```python
-prompt = f"""Write a brief, supportive weekly summary from these facts.
-Only make claims supported by the data. Be specific, not generic.
-Facts: {structured_facts}"""
+```
+detect_sleep_mood(repo, user_id, lookback_days=60) → Insight | None
+run_all_detectors(repo, user_id) → list[Insight]
 ```
 
-Use GPT-4o (not mini) for this — quality matters for user-facing prose.
-Store both the structured facts and the LLM summary.
+Pattern: each detector is a standalone function. `run_all_detectors` calls them
+all and returns newly created insights. Adding a detector = writing one function
+and registering it in the list.
 
-### 3.3 Extend Audit Logging to All Objects
+**Endpoint: `POST /api/v1/insights/detect`**
+- Triggers `run_all_detectors` for the given user
+- Returns list of newly created candidate insights
+- Idempotent: re-running won't duplicate insights (detector_key dedup)
 
-Currently only goals/tasks have audit trails. Extend to:
-- Journal entries, checkins, activities, metric observations
-- Insights (status changes: candidate → active → rejected)
-- Heuristics (enable/disable/deactivate)
+### 2.4 Heuristic Promotion
 
-**Definition of done for Phase 3:**
-- [ ] Weekly reviews include activity summaries and insight mentions
-- [ ] LLM produces human-readable narrative (not a data dump)
-- [ ] All object types have audit trail on modification
-- [ ] Reviews generated from WHYNN data are manually reviewed for quality
+**Endpoint: `POST /api/v1/insights/{id}/promote`**
+
+Validates before promoting:
+- Insight status must be `active` (user has reviewed and accepted it)
+- ≥ 5 supporting observations in evidence_ids
+- Pattern spans ≥ 3 weeks (time_window_end − time_window_start)
+- Counter-evidence ratio ≤ 1:3
+
+If valid:
+- Creates Heuristic linked to the Insight via `insight_id`
+- Stores `promotion_snapshot` with the exact thresholds and values at
+  promotion time
+- Updates Insight status to `promoted`
+
+If invalid:
+- Returns 409 with structured explanation of which thresholds weren't met
+
+**Promotion is always user-initiated.** The system surfaces candidates; the
+user decides what becomes a rule.
+
+### 2.5 Insight Lifecycle (Accept / Reject / Archive)
+
+**Endpoint: `PUT /api/v1/insights/{id}/status`**
+
+Status transitions:
+```
+candidate → active     (user reviewed, accepts the pattern)
+candidate → rejected   (user disagrees — store reason)
+candidate → archived   (not useful right now, revisit later)
+active    → promoted   (via promote endpoint only)
+active    → rejected   (user changed their mind)
+active    → archived
+rejected  → archived   (cleanup)
+```
+
+On rejection:
+- Store `rejection_reason` (free text from user)
+- The `detector_key` + `rejected` status combination prevents re-generation
+- Audit log records the status change with timestamp and reason
+
+### 2.6 Second Detector (Stretch)
+
+Only after sleep-mood works end-to-end:
+- **Training volume → next-day energy** — strike count / session count correlated
+  with next day's energy rating
+- **Adherence decay** — missed prompt cycles correlate with fewer journal entries
+
+Each detector follows the same function signature. Generalize into a framework
+only after 3+ detectors reveal common patterns.
+
+### Definition of Done — Phase 2
+
+- [ ] `detector_key` and `promotion_snapshot` columns added (migration-safe)
+- [ ] Sleep-mood detector runs against real data, produces ≥1 meaningful insight
+- [ ] Detection is idempotent (re-running doesn't duplicate)
+- [ ] Rejected detector_keys are not re-generated
+- [ ] Promote endpoint validates thresholds, stores snapshot
+- [ ] Status transitions enforce valid state machine
+- [ ] Tests: detection, dedup, promotion (pass + fail), rejection, re-detect blocking
 
 ---
 
-## Phase 4: Make It Usable (Weeks 7–8)
+## Phase 3: Weekly Review + Audit Expansion
 
-### 4.1 Build CLI Tool
+### 3.1 Weekly Review Improvements
 
-The fastest path to daily use. Use Click + rich/tabulate for terminal output.
+Current state: deterministic aggregation. Upgrade to include:
+- Top insights (if any) surfaced during the review period
+- Activity summaries (session counts, strike totals, training types)
+- Specific entry references ("On April 12, you noted…")
+- Sparse-data flags ("No check-in on Tuesday — was that intentional?")
+
+### 3.2 LLM Summary Layer
+
+After computing structured facts, pass to LLM for human-readable narrative:
+- Use GPT-4o (not mini) — quality matters for user-facing prose
+- Store both structured facts and LLM summary
+- Prompt enforces evidence grounding: "Only make claims supported by the data"
+
+### 3.3 Audit Trail Expansion
+
+Extend audit logging beyond goals/tasks to cover:
+- Journal entries, checkins, activities, metric observations
+- Insight status changes (candidate → active → rejected → promoted)
+- Heuristic lifecycle (activate, deactivate, update)
+
+### Definition of Done — Phase 3
+
+- [ ] Weekly reviews include insight mentions and activity summaries
+- [ ] LLM narrative is human-readable, not a data dump
+- [ ] All object types have audit trail on modification
+- [ ] Reviews from real WHYNN data manually reviewed for quality
+
+---
+
+## Phase 4: Make It Usable
+
+### 4.1 CLI Tool
+
+Click + rich/tabulate for terminal output:
 
 ```bash
-# Daily interaction
-memorychain log "Slept 7h, mood 7/10. Did 6 rounds of bagwork, 480 strikes."
-memorychain today              # show today's checkin, open tasks, active goals
+memorychain log "Slept 7h, mood 7/10. Did 6 rounds of bagwork."
+memorychain today              # today's checkin, open tasks, active goals
 memorychain search "sleep"     # keyword search across all objects
-
-# Review and insights
 memorychain review             # generate/show this week's review
-memorychain insights           # list candidate insights
-memorychain promote <id>       # promote insight to heuristic
-
-# Management
+memorychain insights           # list candidates
+memorychain promote <id>       # promote insight → heuristic
 memorychain goals              # list active goals
 memorychain tasks              # list open tasks
 memorychain import <file>      # bulk import from log file
 ```
 
-### 4.2 Design the Daily Workflow
+### 4.2 Extraction Confirmation Flow
 
-The CLI isn't just commands — it's a workflow. Define what daily use looks like:
+*Deferred from Phase 1A.* When chat extraction detects structured data, confirm
+with the user before storing. This is a UX concern that belongs here, not in the
+extraction layer — it needs the CLI or UI to present confirmations naturally.
 
-1. **Morning:** `memorychain today` — see yesterday's summary, open tasks, active goals
+Approach:
+- After extraction, present a summary: "I found: Sleep 7h, Mood 7/10, Activity: bagwork. Store this?"
+- User confirms or corrects
+- Corrected values override extracted values (provenance: `user`)
+- Only relevant for freeform chat input, not questionnaire mode (which is already interactive)
+
+### 4.3 Daily Workflow Design
+
+1. **Morning:** `memorychain today` — yesterday's summary, open tasks, active goals
 2. **During day:** `memorychain log "..."` — quick entries as things happen
 3. **Evening:** `memorychain log "..."` — full daily log with metrics
-4. **Weekly:** `memorychain review` — see the week's synthesis + insights
+4. **Weekly:** `memorychain review` — synthesis + insights
 5. **Ad hoc:** `memorychain search`, `memorychain insights`, `memorychain promote`
 
-### 4.3 Web UI (Stretch Goal)
+### 4.4 Web UI (Stretch)
 
-Only if the CLI workflow proves insufficient. If you build it:
-- Use Streamlit for rapid prototyping (not React — too heavy for MVP)
+Only if CLI proves insufficient. Streamlit for rapid prototyping:
 - Five views: Today, Journal, Goals, Insights, Weekly Review
-- Consume the existing API
+- Consumes existing API
 
-**Definition of done for Phase 4:**
-- [ ] CLI tool handles daily log → extraction → storage flow
+### Definition of Done — Phase 4
+
+- [ ] CLI handles daily log → extraction → storage flow
+- [ ] Extraction confirmation works in freeform mode
 - [ ] `memorychain today` shows a useful daily summary
-- [ ] `memorychain review` generates and displays weekly review
+- [ ] `memorychain review` generates weekly review
 - [ ] Insight commands work (list, promote, reject)
-- [ ] You can actually use it daily for 1+ week without hitting blockers
+- [ ] Usable daily for 1+ week without blockers
 
 ---
 
 ## Deferred (V1.1+)
-
-These are real needs, but not MVP-blocking:
 
 - **Multi-user auth** — JWT, user accounts, data isolation
 - **Semantic search** — Embeddings + vector similarity
@@ -269,47 +301,34 @@ These are real needs, but not MVP-blocking:
 - **Mobile interface** — React Native or PWA for on-the-go logging
 - **Generalized insight engine** — Abstract pattern detection across arbitrary metric pairs
 - **Heuristic application** — System uses heuristics to generate warnings/guidance
+- **RPG framing** — Buff/XP tracking stored in Activity.metadata for now; explicit tracking if it proves valuable
 
 ---
 
 ## Success Criteria (By End of Phase 4)
 
-- System ingests real WHYNN daily logs with ≥ 80% field accuracy
-- At least 1 meaningful insight is detected from historical data
-- User can promote insights to heuristics (with evidence validation)
+- At least 1 statistically grounded insight detected from real data
+- User can promote insights to heuristics with evidence validation
+- Rejected patterns are never re-generated
 - Weekly reviews are human-readable and reference specific entries
-- All mutations are auditable with rollback capability
-- You can use it daily via CLI for 1+ week
-- All tests pass (aim for ≥ 30 tests covering new objects + flows)
+- All mutations are auditable
+- CLI is usable daily for 1+ week
+- All tests pass (target ≥ 50 tests covering detection + lifecycle flows)
 
 ---
 
-## Estimated Timeline
+## Resolved Decisions
 
-| Phase | Focus | Weeks |
-|-------|-------|-------|
-| 0: Foundation Fixes | Missing tables, provenance, transactions, FTS5, extraction service | 0.5–1 |
-| 1: Real Data + Extraction | WHYNN parser, field extractors, LLM for freeform, bulk import, iteration | 2–3 |
-| 2: Insight Engine | Sleep-mood detector, promotion flow, rejection flow | 1.5–2 |
-| 3: Weekly Review + Audit | LLM polish, activity summaries, full audit coverage | 1 |
-| 4: CLI + Daily Workflow | Click CLI, daily workflow design, usability testing | 1–2 |
-| **Total** | | **~8–10 weeks** |
+These were open questions in earlier iterations. Documenting the resolution
+to prevent backtracking:
 
-The range accounts for the extraction iteration loop (Phase 1.6) — the
-hardest part is getting extraction right on messy real data, and that takes
-as long as it takes.
-
----
-
-## Open Questions
-
-- **LLM cost budget:** GPT-4o-mini extraction ≈ $0.01–0.03 per entry. GPT-4o
-  for weekly review summaries ≈ $0.05–0.10 per review. Comfortable with ~$5-10/month?
-- **Real-time vs. batch insight detection:** Run on every ingestion (expensive,
-  immediate) or daily/weekly batch (cheaper, delayed)? Recommend weekly batch
-  (tied to review generation).
-- **RPG framing (buffs, XP, levels):** Treat as domain metadata? Store in
-  Activity.metadata? Or build explicit XP tracking? Recommend: metadata for
-  now, explicit tracking if it proves valuable.
-- **ODT file import:** Several WHYNN logs are .odt format. Do we need an ODT
-  parser, or can you export them as .txt?
+| Question | Resolution |
+|----------|-----------|
+| LLM cost budget | GPT-4o-mini for extraction (~$0.01/entry), GPT-4o for summaries (~$0.10/review). Acceptable. |
+| Real-time vs. batch detection | Manual trigger for now (`POST /detect`). Weekly batch (tied to review) later. |
+| RPG framing (buffs, XP) | Store as metadata in Activity. Defer explicit tracking. |
+| ODT file import | Export to .txt manually. No ODT parser needed. |
+| Insight generation approach | Deterministic statistics (Pearson correlation), not LLM-detected. LLM used only for phrasing. |
+| Sleep threshold | Data-driven (median split), not hardcoded 6 hours. |
+| Confirmation flow timing | Deferred to Phase 4 (needs CLI/UI to be useful). |
+| Confidence scale | 0.0–1.0 numeric, derived from correlation coefficient. User-facing labels mapped in UI layer. |

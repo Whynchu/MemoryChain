@@ -1,10 +1,15 @@
 # MemoryChain — Design Decisions
 
 > This document captures every major design decision — both resolved and open.
-> Decisions locked during V0.2.0 implementation are marked with ✅ LOCKED.
+> Decisions locked during implementation are marked with ✅ LOCKED.
 > Open questions that still need resolution are marked with ❓ OPEN.
 >
-> **Last updated:** After Opus architectural review (post-V0.2.0).
+> **Last updated:** V0.5.0-dev (Phase 2 planning, post-Opus review).
+>
+> ⚠️ **Note:** This document originated during V0.2.0 planning. Many items
+> listed as open below have since been resolved through implementation.
+> The **Decision Summary Checklist** at the bottom is the authoritative
+> quick-reference. See [NEXT_STEPS.md](../NEXT_STEPS.md) for the current roadmap.
 
 ---
 
@@ -478,28 +483,28 @@ CREATE VIEW semantic_self_memory AS
 
 ## Decision Summary Checklist
 
-Locked V1 baseline on 2026-03-30:
+Updated V0.5.0-dev — reflects actual implementation, not original proposals.
 
-| # | Decision | Your Pick |
-|---|----------|-----------|
-| 1.1 | Database engine | PostgreSQL |
-| 1.2 | Backend language/framework | Python + FastAPI |
-| 1.3 | LLM provider/model | OpenAI cloud-first; GPT-4o-mini for extraction, GPT-4o for summarization/analysis |
-| 1.4 | Frontend approach | Backend/API first; CLI or simple script ingestion for V1 |
-| 2.1 | API style (REST/GraphQL/tRPC) | REST |
-| 2.3 | Auth approach | Static API key |
-| 3.1 | Insight generation trigger | Hybrid: deterministic pattern check plus LLM phrasing |
-| 3.1 | Minimum evidence for Insight | >= 3 observations within 14 days |
-| 3.2 | Heuristic requires user confirmation? | Yes, always |
-| 3.3 | Confidence scale | Both numeric 0.0-1.0 and user-facing labels |
-| 4.2 | Correction approach | Hybrid: edit authored objects with audit; reject/archive derived objects |
-| 5.1 | Evidence citation granularity | Object + type |
-| 6.1 | Semantic search in V1? | No; keyword/date/type/tag search only |
-| 6.2 | Chat interface approach | Guided prompts + query-only retrieval |
-| 7.1 | WeeklyReview generation strategy | Deterministic facts + LLM polish |
-| 8.1 | Partial extraction handling | Store what validates; log failures |
-| 8.2 | Duplicate detection | Exact content hash dedup |
-| 8.3 | Legacy import in V1? | Defer until core ingestion is stable |
-| 9.1 | Data at rest encryption | Unencrypted local/dev |
-| 9.2 | LLM data privacy approach | Send raw text to cloud LLM |
-| 10.1 | Memory layer implementation | Database views |
+| # | Decision | Resolution | Status |
+|---|----------|-----------|--------|
+| 1.1 | Database engine | **SQLite** (file-based, FTS5 enabled) | ✅ Implemented |
+| 1.2 | Backend language/framework | Python 3.11+ / FastAPI / Pydantic | ✅ Implemented |
+| 1.3 | LLM provider/model | GPT-4o-mini for extraction (hybrid mode w/ regex fallback), GPT-4o for summaries | ✅ Implemented |
+| 1.4 | Frontend approach | API-first; CLI planned for Phase 4 | ✅ Decided |
+| 2.1 | API style | REST | ✅ Implemented |
+| 2.3 | Auth approach | Static API key (`X-API-Key`) | ✅ Implemented |
+| 3.1 | Insight generation trigger | Deterministic statistics (Pearson correlation) + LLM phrasing | 🔜 Phase 2 |
+| 3.1 | Minimum evidence for Insight | ≥ 7 data points, \|r\| ≥ 0.3 correlation threshold | 🔜 Phase 2 |
+| 3.2 | Heuristic requires user confirmation? | Yes, always — user-initiated promotion only | ✅ Decided |
+| 3.3 | Confidence scale | 0.0–1.0 numeric, derived from correlation coefficient | 🔜 Phase 2 |
+| 4.2 | Correction approach | Hybrid: edit authored objects with audit; reject/archive derived objects | ✅ Decided |
+| 5.1 | Evidence citation granularity | Object-level (ID list in JSON array) | ✅ Implemented |
+| 6.1 | Semantic search in V1? | No; FTS5 keyword + date + type search | ✅ Implemented |
+| 6.2 | Chat interface approach | Guided prompts + questionnaire commands + freeform extraction | ✅ Implemented |
+| 7.1 | WeeklyReview generation | Deterministic aggregation; LLM polish planned for Phase 3 | ✅ Partial |
+| 8.1 | Partial extraction handling | Store what validates; log failures | ✅ Implemented |
+| 8.2 | Duplicate detection | Content hash dedup on SourceDocument | ✅ Implemented |
+| 8.3 | Legacy import | WHYNN parser + bulk import script; `provenance: import` | ✅ Implemented |
+| 9.1 | Data at rest encryption | Unencrypted local SQLite | ✅ Decided |
+| 9.2 | LLM data privacy | Send raw text to cloud LLM (offline fallback via regex mode) | ✅ Decided |
+| 10.1 | Memory layer implementation | Not yet implemented; database views planned | ❓ Deferred |

@@ -6,7 +6,7 @@ A digital partner that lives alongside you, knows your habits, tracks your metri
 
 MemoryChain separates *observations* (what happened) from *interpretations* (patterns) from *operational rules* (what to do about it). Casual conversation never accidentally becomes an execution constraint — but real patterns get surfaced and tracked.
 
-**Current state:** v0.4.0 — 47 passing tests. Phase 0 foundation ✅, Phase 1A questionnaires + hybrid extraction ✅, Phase 1B WHYNN log import ✅. Building toward the insight engine.
+**Current state:** v0.5.0-dev — 47 passing tests, 58 daily checkins. Phases 0–1 complete (foundation, questionnaires, hybrid extraction, WHYNN import). Building Phase 2: statistically grounded insight detection.
 
 ---
 
@@ -69,15 +69,16 @@ The system doesn't just store — it *notices*. As data accumulates, patterns em
 
 **See [NEXT_STEPS.md](./NEXT_STEPS.md) for the full roadmap.**
 
-**Building now — Phase 2: Insight Engine**
-1. Sleep-mood correlation detector (first concrete insight)
-2. `POST /api/v1/insights/detect` endpoint
-3. Heuristic promotion — confirmed patterns become rules
-4. Insight rejection with audit trail
+**Building now — Phase 2: Insight Detection Engine**
+1. Schema evolution — `detector_key` on insights (fingerprinting), `promotion_snapshot` on heuristics (audit)
+2. Sleep-mood correlation detector — Pearson correlation, data-driven thresholds, not bucket hacking
+3. Detection lifecycle — idempotent re-runs, rejected patterns never re-generated
+4. Heuristic promotion — threshold validation with stored evidence snapshots
+5. Insight state machine — candidate → active → promoted/rejected/archived
 
 **Then:**
-- Phase 3: Heuristic rules — "if X then Y" operational logic derived from validated patterns
-- Phase 4: Daily workflow — CLI/mobile interface, scheduled briefings, the full operator experience
+- Phase 3: Weekly review upgrades (insight mentions, LLM narrative, full audit trail)
+- Phase 4: CLI daily workflow + extraction confirmation flow
 
 ---
 
