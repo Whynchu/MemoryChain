@@ -21,7 +21,7 @@ ActivityType = Literal[
 GoalStatus = Literal["active", "paused", "completed", "dropped"]
 TaskStatus = Literal["todo", "in_progress", "done", "canceled"]
 Priority = Literal["low", "medium", "high"]
-InsightStatus = Literal["candidate", "active", "rejected", "archived"]
+InsightStatus = Literal["candidate", "active", "rejected", "archived", "promoted"]
 HeuristicSourceType = Literal["validated_pattern", "user_defined", "correction_history"]
 ProtocolStatus = Literal["active", "archived", "draft"]
 CompletionStatus = Literal["completed", "partial", "skipped"]
@@ -260,6 +260,7 @@ class InsightCreate(BaseModel):
     counterevidence_ids: list[str] = Field(default_factory=list)
     time_window_start: date | None = None
     time_window_end: date | None = None
+    detector_key: str | None = None
 
 
 class InsightUpdate(BaseModel):
@@ -281,6 +282,7 @@ class Insight(BaseModel):
     counterevidence_ids: list[str] = Field(default_factory=list)
     time_window_start: date | None = None
     time_window_end: date | None = None
+    detector_key: str | None = None
     provenance: Provenance = "system_inferred"
 
 
@@ -295,6 +297,7 @@ class HeuristicCreate(BaseModel):
     counterevidence_ids: list[str] = Field(default_factory=list)
     validation_notes: str | None = None
     insight_id: str | None = None
+    promotion_snapshot: dict | None = None
 
 
 class Heuristic(BaseModel):
@@ -310,6 +313,7 @@ class Heuristic(BaseModel):
     counterevidence_ids: list[str] = Field(default_factory=list)
     validation_notes: str | None = None
     insight_id: str | None = None
+    promotion_snapshot: dict | None = None
     provenance: Provenance = "system_inferred"
 
 

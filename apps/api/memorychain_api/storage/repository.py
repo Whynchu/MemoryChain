@@ -1202,8 +1202,8 @@ class Repository:
             INSERT INTO insights (
                 id, user_id, created_at, title, summary, confidence, status,
                 evidence_ids_json, counterevidence_ids_json,
-                time_window_start, time_window_end
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                time_window_start, time_window_end, detector_key
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 insight_id,
@@ -1217,6 +1217,7 @@ class Repository:
                 _to_json(payload.counterevidence_ids),
                 _date_to_iso(payload.time_window_start),
                 _date_to_iso(payload.time_window_end),
+                payload.detector_key,
             ),
         )
         self._index_for_search(
@@ -1288,8 +1289,8 @@ class Repository:
             INSERT INTO heuristics (
                 id, user_id, created_at, updated_at, rule, source_type,
                 confidence, active, evidence_ids_json, counterevidence_ids_json,
-                validation_notes, insight_id
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                validation_notes, insight_id, promotion_snapshot
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 heuristic_id,
@@ -1304,6 +1305,7 @@ class Repository:
                 _to_json(payload.counterevidence_ids),
                 payload.validation_notes,
                 payload.insight_id,
+                _to_json(payload.promotion_snapshot) if payload.promotion_snapshot else None,
             ),
         )
         self._index_for_search(
@@ -2059,6 +2061,7 @@ class Repository:
             counterevidence_ids=json.loads(row["counterevidence_ids_json"]),
             time_window_start=date.fromisoformat(row["time_window_start"]) if row["time_window_start"] else None,
             time_window_end=date.fromisoformat(row["time_window_end"]) if row["time_window_end"] else None,
+            detector_key=row["detector_key"],
             provenance=row["provenance"],
         )
 
@@ -2076,6 +2079,7 @@ class Repository:
             counterevidence_ids=json.loads(row["counterevidence_ids_json"]),
             validation_notes=row["validation_notes"],
             insight_id=row["insight_id"],
+            promotion_snapshot=json.loads(row["promotion_snapshot"]) if row["promotion_snapshot"] else None,
             provenance=row["provenance"],
         )
 

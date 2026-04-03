@@ -346,6 +346,10 @@ def initialize(conn: sqlite3.Connection) -> None:
     # Legacy migration: engagement_notes_json on weekly_reviews
     _migrate_add_column(conn, "weekly_reviews", "engagement_notes_json", "TEXT NOT NULL DEFAULT '[]'")
 
+    # Phase 2: insight detection fingerprinting and heuristic promotion audit
+    _migrate_add_column(conn, "insights", "detector_key", "TEXT")
+    _migrate_add_column(conn, "heuristics", "promotion_snapshot", "TEXT")
+
     conn.commit()
 
 
