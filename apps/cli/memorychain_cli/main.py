@@ -275,22 +275,49 @@ def heuristics() -> None:
         raise SystemExit(1)
 
 
+# ── setup ─────────────────────────────────────────────────────
+@cli.command()
+def setup() -> None:
+    """Configure MemoryChain (OpenAI API key, account connection)."""
+    from .setup import run_setup
+    success = run_setup()
+    raise SystemExit(0 if success else 1)
+
+
 # ── status ───────────────────────────────────────────────────
 @cli.command()
 def status() -> None:
-    """Check API health and show connection info."""
+    """Check API health, LLM connection, and account info."""
     from .config import API_BASE_URL
+    from . import settings
+    from .setup import show_account_info, validate_openai_key
 
+    # API connection
     console.print(f"[dim]API:[/dim] {API_BASE_URL}")
     try:
         data = client.health()
         console.print(f"[green]✓[/green] API is {data.get('status', 'unknown')}")
     except httpx.ConnectError:
         console.print("[red]✗[/red] Cannot connect to API")
-        raise SystemExit(1)
     except Exception as exc:
         console.print(f"[red]✗[/red] Error: {exc}")
-        raise SystemExit(1)
+
+    # LLM / account info
+    api_key = settings.get_openai_key()
+    if api_key:
+        config = settings.load_config()
+        name = config.get("account_name")
+        if name:
+            console.print(f"[green]✓[/green] OpenAI: {name}")
+        else:
+            console.print("[dim]  Validating OpenAI key…[/dim]")
+            account = validate_openai_key(api_key)
+            if account:
+                show_account_info(account)
+            else:
+                console.print("[red]✗[/red] OpenAI key invalid or expired")
+    else:
+        console.print("[yellow]⚠[/yellow] No OpenAI key configured. Run: memorychain setup")
 
 
 if __name__ == "__main__":

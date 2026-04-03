@@ -64,7 +64,7 @@ HELP_TEXT = """\
 
 
 def _welcome_banner() -> None:
-    """Print a welcome banner with connection status."""
+    """Print a welcome banner with connection status, then check LLM config."""
     banner = Text()
     banner.append("MemoryChain", style="bold cyan")
     banner.append(" v0.2.0\n", style="dim")
@@ -78,6 +78,11 @@ def _welcome_banner() -> None:
 
     console.print()
     console.print(Panel(banner, border_style="cyan", padding=(0, 2)))
+
+    # Check LLM configuration — prompt setup if missing
+    from .setup import check_and_prompt_setup
+    check_and_prompt_setup()
+
     console.print()
 
 

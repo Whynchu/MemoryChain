@@ -39,7 +39,8 @@ class TestStatus:
 
         with patch("memorychain_cli.client.httpx.get", side_effect=_httpx.ConnectError("refused")):
             result = runner.invoke(cli, ["status"])
-            assert result.exit_code == 1
+            assert result.exit_code == 0
+            assert "Cannot connect" in result.output
 
 
 # ── log command ──────────────────────────────────────────────
