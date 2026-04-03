@@ -144,20 +144,19 @@ def _print_welcome() -> None:
 
 
 def _build_prompt() -> HTML:
-    """Build a directory-aware prompt like Copilot/Codex."""
+    """Minimal prompt — just a chevron. Context lives in the bottom toolbar."""
+    return HTML("<ansigreen><b>›</b></ansigreen> ")
+
+
+def _bottom_toolbar() -> HTML:
+    """Pinned bottom bar showing directory, git branch, and version."""
     short_path = get_short_cwd(max_parts=2)
     git = detect_git()
+    parts = [f"<ansicyan>{short_path}</ansicyan>"]
     if git:
-        branch = git["branch"]
-        return HTML(
-            f"<ansicyan>{short_path}</ansicyan> "
-            f"<ansimagenta>({branch})</ansimagenta> "
-            f"<ansigreen><b>memorychain</b></ansigreen> <ansigray>›</ansigray> "
-        )
-    return HTML(
-        f"<ansicyan>{short_path}</ansicyan> "
-        f"<ansigreen><b>memorychain</b></ansigreen> <ansigray>›</ansigray> "
-    )
+        parts.append(f"<ansimagenta>{git['branch']}</ansimagenta>")
+    parts.append("<ansigray>MemoryChain v0.3.0</ansigray>")
+    return HTML("  ".join(parts))
 
 
 def _handle_slash(line: str, conversation_id: str | None) -> str | None:
@@ -313,6 +312,7 @@ def run_repl() -> None:
         history=InMemoryHistory(),
         completer=completer,
         complete_while_typing=True,
+        bottom_toolbar=_bottom_toolbar,
     )
 
     conversation_id: str | None = None

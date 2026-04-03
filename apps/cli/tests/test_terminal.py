@@ -149,8 +149,8 @@ class TestReplFunctions:
         mock_git.return_value = {"branch": "main", "root": "/test"}
         prompt = _build_prompt()
         assert prompt is not None
-        # The formatted text should contain "main"
-        assert "main" in str(prompt.value)
+        # Minimal prompt is just a chevron
+        assert "›" in str(prompt.value)
 
     @patch("memorychain_cli.repl.detect_git")
     def test_build_prompt_without_git(self, mock_git):
@@ -158,7 +158,7 @@ class TestReplFunctions:
         mock_git.return_value = None
         prompt = _build_prompt()
         assert prompt is not None
-        assert "memorychain" in str(prompt.value)
+        assert "›" in str(prompt.value)
 
     @patch("memorychain_cli.repl.client")
     def test_build_header_connected(self, mock_client):
