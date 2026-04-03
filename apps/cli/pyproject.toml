@@ -1,0 +1,26 @@
+[project]
+name = "memorychain-cli"
+version = "0.1.0"
+description = "MemoryChain CLI — daily logging, review, and insight management from the terminal"
+requires-python = ">=3.11"
+dependencies = [
+  "click>=8.1.0,<9.0.0",
+  "httpx>=0.24.0,<1.0.0",
+  "rich>=13.0.0,<14.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0.0,<9.0.0",
+]
+
+[project.scripts]
+memorychain = "memorychain_cli.main:cli"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["memorychain_cli*"]
