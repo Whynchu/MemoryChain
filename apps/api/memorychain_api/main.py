@@ -1,7 +1,8 @@
 from fastapi import FastAPI
 
 from .config import settings
-from .routers import activities, audit_log, chat, checkins, engagement, goals, health, heuristics, ingest, insights, journal, metrics, prompt_cycles, prompts, protocols, questionnaires, reviews, search, tasks
+from .routers import activities, audit_log, chat, checkins, engagement, goals, health, heuristics, ingest, insights, journal, metrics, prompt_cycles, prompts, protocols, questionnaires, reviews, search, tasks, users
+from .services.seed_templates import seed_default_templates
 from .storage.db import connect, initialize
 from .storage.repository import Repository
 
@@ -12,6 +13,7 @@ def create_app() -> FastAPI:
     conn = connect(settings.db_path)
     initialize(conn)
     app.state.repo = Repository(conn)
+    seed_default_templates(app.state.repo)
 
     app.include_router(health.router)
     app.include_router(chat.router)
@@ -32,6 +34,7 @@ def create_app() -> FastAPI:
     app.include_router(questionnaires.router)
     app.include_router(insights.router)
     app.include_router(heuristics.router)
+    app.include_router(users.router)
     return app
 
 

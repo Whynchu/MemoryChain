@@ -332,6 +332,19 @@ def initialize(conn: sqlite3.Connection) -> None:
 
         CREATE INDEX IF NOT EXISTS idx_questionnaire_sessions_template
         ON questionnaire_sessions (template_id, started_at);
+
+        CREATE TABLE IF NOT EXISTS user_profiles (
+            user_id TEXT PRIMARY KEY,
+            display_name TEXT,
+            schedule_json TEXT DEFAULT '{}',
+            sleep_target REAL DEFAULT 8.0,
+            wake_time TEXT,
+            checkin_time_pref TEXT DEFAULT 'morning',
+            custom_dimensions_json TEXT DEFAULT '[]',
+            onboarded_at TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
         """
     )
 
@@ -349,6 +362,11 @@ def initialize(conn: sqlite3.Connection) -> None:
     # Phase 2: insight detection fingerprinting and heuristic promotion audit
     _migrate_add_column(conn, "insights", "detector_key", "TEXT")
     _migrate_add_column(conn, "heuristics", "promotion_snapshot", "TEXT")
+
+    # Phase 8 migrations — enhanced checkin fields
+    _migrate_add_column(conn, "daily_checkins", "stress_level", "INTEGER")
+    _migrate_add_column(conn, "daily_checkins", "dreams", "TEXT")
+    _migrate_add_column(conn, "daily_checkins", "thought_loops", "TEXT")
 
     # Phase 3: enriched weekly reviews
     _migrate_add_column(conn, "weekly_reviews", "insight_mentions_json", "TEXT NOT NULL DEFAULT '[]'")

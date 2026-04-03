@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from ..schemas import (
+    QuestionDef,
     QuestionnaireSession,
     QuestionnaireSessionCreate,
     QuestionnaireTemplate,
@@ -61,9 +62,21 @@ class QuestionnaireService:
             )
         )
         
-        # Get first question
-        first_question = template.questions[0]
-        question_text = self._format_question(first_question, template, 1, len(template.questions))
+        # Get first question (skip any that have unsatisfied show_if — unlikely for first questions)
+        first_index = self._find_next_showable_question(template.questions, 0, {})
+        if first_index is None:
+            raise ValueError("Template has no showable questions")
+
+        first_question = template.questions[first_index]
+        visible_total = self._count_visible_questions(template.questions, {})
+        question_text = self._format_question(first_question, template, 1, visible_total)
+        
+        # If the first showable question is not index 0, update the session
+        if first_index != 0:
+            self.repo.update_questionnaire_session(
+                session.id, session.user_id,
+                current_question_index=first_index,
+            )
         
         return session, question_text
     
@@ -114,15 +127,19 @@ class QuestionnaireService:
         updated_responses = session.raw_responses.copy()
         updated_responses[current_question.id] = user_response
         
-        # Move to next question
-        next_index = session.current_question_index + 1
-        is_complete = next_index >= len(template.questions)
+        # Find next showable question (skip those whose show_if condition is not met)
+        next_index = self._find_next_showable_question(
+            template.questions,
+            session.current_question_index + 1,
+            updated_answers,
+        )
+        is_complete = next_index is None
         
         # Update session
         self.repo.update_questionnaire_session(
             session.id,
             session.user_id,
-            current_question_index=next_index,
+            current_question_index=next_index if not is_complete else len(template.questions),
             answers=updated_answers,
             raw_responses=updated_responses,
             status="completed" if is_complete else "in_progress",
@@ -135,10 +152,71 @@ class QuestionnaireService:
         else:
             # Ask next question
             next_question = template.questions[next_index]
+            answered_so_far = sum(
+                1 for i in range(next_index)
+                if self._should_show_question(template.questions[i], updated_answers)
+                or template.questions[i].id in updated_answers
+            )
+            visible_total = self._count_visible_questions(template.questions, updated_answers)
             question_text = self._format_question(
-                next_question, template, next_index + 1, len(template.questions)
+                next_question, template, answered_so_far + 1, visible_total
             )
             return question_text, False
+
+    # ── Adaptive question helpers ────────────────────────────
+
+    def _should_show_question(self, question: QuestionDef, answers: dict[str, object]) -> bool:
+        """Evaluate whether a conditional question should be shown."""
+        if not question.show_if:
+            return True  # No condition = always show
+
+        condition = question.show_if
+        dep_id = condition.get("question_id")
+        operator = condition.get("operator", "lt")
+        threshold = condition.get("value", 5)
+
+        dep_answer = answers.get(dep_id)
+        if dep_answer is None:
+            return False  # Dependency not answered, skip
+
+        try:
+            dep_value = float(dep_answer)
+        except (ValueError, TypeError):
+            return True  # Non-numeric answer, show anyway
+
+        if operator == "lt":
+            return dep_value < threshold
+        elif operator == "lte":
+            return dep_value <= threshold
+        elif operator == "gt":
+            return dep_value > threshold
+        elif operator == "gte":
+            return dep_value >= threshold
+        elif operator == "eq":
+            return dep_value == threshold
+        return True
+
+    def _find_next_showable_question(
+        self,
+        questions: list[QuestionDef],
+        start_index: int,
+        answers: dict[str, object],
+    ) -> int | None:
+        """Return the index of the next question to show, or None if done."""
+        idx = start_index
+        while idx < len(questions):
+            if self._should_show_question(questions[idx], answers):
+                return idx
+            idx += 1
+        return None
+
+    def _count_visible_questions(
+        self,
+        questions: list[QuestionDef],
+        answers: dict[str, object],
+    ) -> int:
+        """Estimate the number of visible questions given current answers."""
+        return sum(1 for q in questions if self._should_show_question(q, answers))
     
     def _format_question(self, question, template, question_num: int, total_questions: int) -> str:
         """Format a question for conversational presentation."""
@@ -201,6 +279,11 @@ class QuestionnaireService:
         if "metric_observation" in template.target_objects:
             self._create_metrics_from_answers(
                 session.user_id, source.id, now, answers, template.questions
+            )
+
+        if "user_profile" in template.target_objects:
+            self._create_user_profile_from_answers(
+                session.user_id, answers, template.questions
             )
     
     def _create_daily_checkin_from_answers(self, user_id: str, source_id: str, now: datetime, answers: dict, questions) -> None:
@@ -277,6 +360,93 @@ class QuestionnaireService:
                         unit="",
                     )
                 )
+
+    def _create_user_profile_from_answers(self, user_id: str, answers: dict, questions: list) -> None:
+        """Map onboarding answers to a UserProfile."""
+        field_map: dict[str, str] = {}
+        for q in questions:
+            if q.target_field and q.id in answers:
+                field_map[q.target_field] = answers[q.id]
+
+        # Parse tracking preferences into custom dimensions
+        custom_dims = self._parse_tracking_preferences(field_map.get("tracking_preferences", ""))
+
+        sleep_target_raw = field_map.get("sleep_target")
+        try:
+            sleep_target = float(sleep_target_raw) if sleep_target_raw is not None else 8.0
+        except (ValueError, TypeError):
+            sleep_target = 8.0
+
+        schedule = {}
+        if field_map.get("schedule"):
+            schedule["work"] = field_map["schedule"]
+        if field_map.get("training"):
+            schedule["training"] = field_map["training"]
+
+        existing = self.repo.get_user_profile(user_id)
+        if existing:
+            self.repo.update_user_profile(
+                user_id,
+                display_name=field_map.get("display_name"),
+                schedule=schedule,
+                sleep_target=sleep_target,
+                wake_time=field_map.get("wake_time"),
+                checkin_time_pref=field_map.get("checkin_time_pref", "morning"),
+                custom_dimensions=custom_dims,
+                onboarded_at=datetime.now(timezone.utc),
+            )
+        else:
+            from ..schemas import UserProfileCreate
+            self.repo.create_user_profile(UserProfileCreate(
+                user_id=user_id,
+                display_name=field_map.get("display_name"),
+                schedule=schedule,
+                sleep_target=sleep_target,
+                wake_time=field_map.get("wake_time"),
+                checkin_time_pref=field_map.get("checkin_time_pref", "morning"),
+                custom_dimensions=custom_dims,
+            ))
+            self.repo.update_user_profile(user_id, onboarded_at=datetime.now(timezone.utc))
+
+        # Create goals from goals text
+        goals_text = field_map.get("goals", "")
+        if goals_text:
+            self._create_goals_from_text(user_id, goals_text)
+
+    @staticmethod
+    def _parse_tracking_preferences(text: str) -> list[dict]:
+        """Convert free-text tracking preferences into custom dimension dicts."""
+        if not text:
+            return []
+        known = {
+            "sleep": "sleep", "mood": "mood", "energy": "energy",
+            "weight": "weight", "stress": "stress", "soreness": "soreness",
+            "dreams": "dreams", "hydration": "hydration",
+            "1": "sleep", "2": "mood", "3": "energy", "4": "weight",
+            "5": "stress", "6": "soreness", "7": "dreams", "8": "hydration",
+        }
+        dims: list[dict] = []
+        parts = [p.strip().lower() for p in text.replace(",", " ").split() if p.strip()]
+        seen: set[str] = set()
+        for part in parts:
+            name = known.get(part, part)
+            if name not in seen:
+                dims.append({"name": name, "type": "number"})
+                seen.add(name)
+        return dims
+
+    def _create_goals_from_text(self, user_id: str, text: str) -> None:
+        """Create Goal objects from comma/newline separated text."""
+        from ..schemas import GoalCreate
+        lines = [l.strip().strip("-•*").strip() for l in text.replace(",", "\n").splitlines()]
+        for line in lines:
+            if line:
+                self.repo.create_goal(GoalCreate(
+                    user_id=user_id,
+                    title=line,
+                    status="active",
+                    priority="medium",
+                ))
     
     def _generate_completion_message(self, template: QuestionnaireTemplate, answers: dict) -> str:
         """Generate a completion message summarizing the questionnaire."""
@@ -306,7 +476,7 @@ def is_questionnaire_command(message: str) -> Optional[str]:
     Check if a message is a questionnaire start command.
     
     Returns template name if found, None otherwise.
-    Examples: "/morning", "/checkin", "/training"
+    Examples: "/morning", "/checkin", "/training", "/onboard"
     """
     message = message.strip().lower()
     
@@ -318,6 +488,7 @@ def is_questionnaire_command(message: str) -> Optional[str]:
         "/workout": "post_training",
         "/sleep": "sleep_review",
         "/mood": "mood_checkin",
+        "/onboard": "onboarding",
     }
     
     return questionnaire_commands.get(message)

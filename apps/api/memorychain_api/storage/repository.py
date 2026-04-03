@@ -44,6 +44,8 @@ from ..schemas import (
     Task,
     TaskCreate,
     TaskUpdate,
+    UserProfile,
+    UserProfileCreate,
     WeeklyReview,
 )
 
@@ -273,8 +275,9 @@ class Repository:
                 id, user_id, source_document_id, date, created_at, effective_at,
                 sleep_hours, sleep_quality, mood, energy, body_weight,
                 body_weight_unit, immediate_thoughts, pain_notes,
-                hydration_start, hydration_unit, provenance
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                hydration_start, hydration_unit, provenance,
+                stress_level, dreams, thought_loops
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 checkin_id,
@@ -294,6 +297,9 @@ class Repository:
                 payload.hydration_start,
                 payload.hydration_unit,
                 payload.provenance,
+                payload.stress_level,
+                payload.dreams,
+                payload.thought_loops,
             ),
         )
         self._index_for_search(object_type="daily_checkin", object_id=checkin_id, user_id=payload.user_id, content=f"{payload.immediate_thoughts or ''} {payload.pain_notes or ''}", effective_at=payload.effective_at.isoformat())
@@ -2062,6 +2068,9 @@ class Repository:
             pain_notes=row["pain_notes"],
             hydration_start=row["hydration_start"],
             hydration_unit=row["hydration_unit"],
+            stress_level=row["stress_level"],
+            dreams=row["dreams"],
+            thought_loops=row["thought_loops"],
         )
 
     def _row_to_goal(self, row: sqlite3.Row) -> Goal:
@@ -2329,7 +2338,7 @@ class Repository:
 
     def get_questionnaire_template(self, template_id: str, user_id: str) -> QuestionnaireTemplate | None:
         row = self.conn.execute(
-            "SELECT * FROM questionnaire_templates WHERE id = ? AND user_id = ?",
+            "SELECT * FROM questionnaire_templates WHERE id = ? AND (user_id = ? OR user_id = 'system')",
             (template_id, user_id),
         ).fetchone()
         return self._row_to_questionnaire_template(row) if row else None
@@ -2474,6 +2483,80 @@ class Repository:
             started_at=datetime.fromisoformat(row["started_at"]),
             completed_at=datetime.fromisoformat(row["completed_at"]) if row["completed_at"] else None,
         )
+
+    # --- User Profile methods ---
+
+    def get_user_profile(self, user_id: str) -> UserProfile | None:
+        row = self.conn.execute(
+            "SELECT * FROM user_profiles WHERE user_id = ?", (user_id,)
+        ).fetchone()
+        if not row:
+            return None
+        return UserProfile(
+            user_id=row["user_id"],
+            display_name=row["display_name"],
+            schedule=json.loads(row["schedule_json"] or "{}"),
+            sleep_target=row["sleep_target"] or 8.0,
+            wake_time=row["wake_time"],
+            checkin_time_pref=row["checkin_time_pref"] or "morning",
+            custom_dimensions=json.loads(row["custom_dimensions_json"] or "[]"),
+            onboarded_at=datetime.fromisoformat(row["onboarded_at"]) if row["onboarded_at"] else None,
+            created_at=datetime.fromisoformat(row["created_at"]),
+            updated_at=datetime.fromisoformat(row["updated_at"]),
+        )
+
+    def create_user_profile(self, payload: UserProfileCreate) -> UserProfile:
+        now = _now_iso()
+        self.conn.execute(
+            """INSERT INTO user_profiles (
+                user_id, display_name, schedule_json, sleep_target, wake_time,
+                checkin_time_pref, custom_dimensions_json, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                payload.user_id,
+                payload.display_name,
+                _to_json(payload.schedule),
+                payload.sleep_target,
+                payload.wake_time,
+                payload.checkin_time_pref,
+                _to_json(payload.custom_dimensions),
+                now, now,
+            ),
+        )
+        self.conn.commit()
+        return self.get_user_profile(payload.user_id)  # type: ignore
+
+    def update_user_profile(self, user_id: str, **kwargs) -> UserProfile | None:
+        """Update user profile fields. Supports: display_name, schedule, sleep_target,
+        wake_time, checkin_time_pref, custom_dimensions, onboarded_at."""
+        now = _now_iso()
+        field_map = {
+            "display_name": "display_name",
+            "schedule": "schedule_json",
+            "sleep_target": "sleep_target",
+            "wake_time": "wake_time",
+            "checkin_time_pref": "checkin_time_pref",
+            "custom_dimensions": "custom_dimensions_json",
+            "onboarded_at": "onboarded_at",
+        }
+        sets = ["updated_at = ?"]
+        params: list = [now]
+        for key, col in field_map.items():
+            if key in kwargs:
+                val = kwargs[key]
+                if col.endswith("_json"):
+                    val = _to_json(val)
+                elif isinstance(val, datetime):
+                    val = val.isoformat()
+                sets.append(f"{col} = ?")
+                params.append(val)
+        params.append(user_id)
+        self.conn.execute(
+            f"UPDATE user_profiles SET {', '.join(sets)} WHERE user_id = ?",
+            params,
+        )
+        self.conn.commit()
+        return self.get_user_profile(user_id)
 
 
 

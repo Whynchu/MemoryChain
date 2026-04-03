@@ -135,9 +135,12 @@ def handle_chat(repo: Repository, payload: ChatRequest) -> ChatResponse:
     # Check if this is a questionnaire command
     template_name = is_questionnaire_command(payload.message)
     if template_name:
-        # Find template by name
+        # Find template by name (check user templates first, then system)
         templates = repo.list_questionnaire_templates(payload.user_id, active_only=True)
         template = next((t for t in templates if t.name.lower() == template_name), None)
+        if not template:
+            system_templates = repo.list_questionnaire_templates("system", active_only=True)
+            template = next((t for t in system_templates if t.name.lower() == template_name), None)
         
         if template:
             # Start questionnaire

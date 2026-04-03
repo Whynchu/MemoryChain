@@ -172,3 +172,16 @@ def health() -> dict[str, Any]:
     r = httpx.get(_url("/health"), timeout=5.0)
     r.raise_for_status()
     return r.json()
+
+
+# ── User Profile ─────────────────────────────────────────────
+def get_user_profile(*, user_id: str | None = None) -> dict[str, Any]:
+    from .config import USER_ID
+    uid = user_id or USER_ID
+    r = httpx.get(
+        _url(f"/api/v1/users/{uid}/profile"),
+        headers=_headers(),
+        timeout=_TIMEOUT,
+    )
+    r.raise_for_status()
+    return r.json()

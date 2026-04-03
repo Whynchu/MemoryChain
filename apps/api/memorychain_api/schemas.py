@@ -105,6 +105,9 @@ class DailyCheckinCreate(BaseModel):
     pain_notes: str | None = None
     hydration_start: float | None = None
     hydration_unit: str | None = None
+    stress_level: int | None = None
+    dreams: str | None = None
+    thought_loops: str | None = None
     provenance: Provenance = "user"
 
 
@@ -125,6 +128,9 @@ class DailyCheckin(BaseModel):
     pain_notes: str | None = None
     hydration_start: float | None = None
     hydration_unit: str | None = None
+    stress_level: int | None = None
+    dreams: str | None = None
+    thought_loops: str | None = None
     provenance: Provenance = "user"
 
 
@@ -547,6 +553,8 @@ class QuestionDef(BaseModel):
     choices: list[str] = Field(default_factory=list)  # For choice questions
     validation_regex: str | None = None  # For text questions
     help_text: str | None = None
+    target_field: str | None = None  # Maps answer to a model field
+    show_if: dict | None = None  # e.g., {"question_id": "dc_mood", "operator": "lt", "value": 5}
 
 
 class QuestionnaireTemplateCreate(BaseModel):
@@ -586,6 +594,29 @@ class QuestionnaireSession(BaseModel):
     raw_responses: dict[str, str] = Field(default_factory=dict)  # question_id -> raw_text
     started_at: datetime
     completed_at: datetime | None = None
+
+
+class UserProfileCreate(BaseModel):
+    user_id: str
+    display_name: str | None = None
+    schedule: dict = Field(default_factory=dict)
+    sleep_target: float = 8.0
+    wake_time: str | None = None
+    checkin_time_pref: str = "morning"
+    custom_dimensions: list[dict] = Field(default_factory=list)
+
+
+class UserProfile(BaseModel):
+    user_id: str
+    display_name: str | None = None
+    schedule: dict = Field(default_factory=dict)
+    sleep_target: float = 8.0
+    wake_time: str | None = None
+    checkin_time_pref: str = "morning"
+    custom_dimensions: list[dict] = Field(default_factory=list)
+    onboarded_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
 
 
 class ChatResponse(BaseModel):

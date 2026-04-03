@@ -51,6 +51,7 @@ SLASH_COMMANDS = [
     "/today", "/review", "/search", "/insights", "/detect",
     "/promote", "/accept", "/reject", "/goals", "/tasks",
     "/heuristics", "/status", "/help", "/clear", "/quit", "/exit",
+    "/checkin", "/onboard",
 ]
 
 HELP_TEXT = f"""\
@@ -76,6 +77,8 @@ HELP_TEXT = f"""\
   [{BLUE_BRIGHT}]/heuristics[/{BLUE_BRIGHT}]       List learned heuristics
   [{BLUE_BRIGHT}]/status[/{BLUE_BRIGHT}]           Check API connection
   [{BLUE_BRIGHT}]/clear[/{BLUE_BRIGHT}]            Clear the screen
+  [{BLUE_BRIGHT}]/checkin[/{BLUE_BRIGHT}]          Start daily check-in
+  [{BLUE_BRIGHT}]/onboard[/{BLUE_BRIGHT}]          Run onboarding questionnaire
   [{BLUE_BRIGHT}]/help[/{BLUE_BRIGHT}]             Show this help
   [{BLUE_BRIGHT}]/quit[/{BLUE_BRIGHT}]             Exit
 
@@ -138,7 +141,38 @@ def _print_welcome() -> None:
     from .setup import check_and_prompt_setup
     check_and_prompt_setup()
 
+    # Check if user needs onboarding
+    _check_onboarding()
+
     console.print()
+
+
+def _check_onboarding() -> None:
+    """If user hasn't completed onboarding, offer to start it."""
+    try:
+        profile = client.get_user_profile()
+        if profile and profile.get("onboarded_at"):
+            return  # Already onboarded
+    except Exception:
+        return  # API not connected or no profile endpoint yet
+
+    console.print()
+    console.print(f"  [{BLUE_BRIGHT}]Welcome to MemoryChain![/{BLUE_BRIGHT}] Let's get you set up.")
+    console.print(f"  [{GREY_MID}]I'll ask a few questions to personalize your experience.[/{GREY_MID}]")
+    console.print()
+
+    from prompt_toolkit import prompt as pt_prompt
+    try:
+        answer = pt_prompt("  Start onboarding? (Y/n): ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        console.print()
+        return
+
+    if answer in ("", "y", "yes"):
+        console.print(f"  [{GREY_MID}]Starting onboarding… type your answers to each question.[/{GREY_MID}]")
+        console.print(f"  [{GREY_MID}]Use /onboard in the prompt if you want to restart later.[/{GREY_MID}]")
+    else:
+        console.print(f"  [{GREY_MID}]No problem! You can start anytime with /onboard[/{GREY_MID}]")
 
 
 def _build_prompt() -> HTML:
@@ -270,6 +304,10 @@ def _handle_slash(line: str, conversation_id: str | None) -> str | None:
             clear_screen()
             console.print(_build_header())
             console.print()
+
+        elif cmd in ("/checkin", "/onboard"):
+            # Route through the chat API as questionnaire commands
+            return _handle_chat(line, conversation_id)
 
         else:
             console.print(f"[dim]Unknown command: {cmd}. Type /help for options.[/dim]")
