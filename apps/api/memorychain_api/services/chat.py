@@ -18,17 +18,42 @@ from .questionnaire import QuestionnaireService, is_questionnaire_command
 
 def _build_memory_context(repo: Repository, user_id: str, conversation_id: str) -> list[str]:
     context: list[str] = []
+    now = datetime.now()
 
-    open_tasks = repo.list_open_tasks(user_id=user_id, limit=3)
+    # Time awareness — local time, day of week, time-of-day period
+    day_name = now.strftime("%A")
+    time_str = now.strftime("%I:%M %p").lstrip("0")
+    hour = now.hour
+    if hour < 6:
+        period = "late night"
+    elif hour < 9:
+        period = "early morning"
+    elif hour < 12:
+        period = "morning"
+    elif hour < 14:
+        period = "early afternoon"
+    elif hour < 17:
+        period = "afternoon"
+    elif hour < 20:
+        period = "evening"
+    else:
+        period = "night"
+    context.append(f"Current time: {day_name} {time_str} ({period})")
+
+    # Open tasks — what's on the user's plate
+    open_tasks = repo.list_open_tasks(user_id=user_id, limit=5)
     if open_tasks:
-        task_text = "; ".join(task.title for task in open_tasks)
-        context.append(f"Open tasks: {task_text}")
+        task_text = "; ".join(task.title for task in open_tasks[:3])
+        context.append(f"Open tasks ({len(open_tasks)}): {task_text}")
 
-    recent_messages = repo.list_conversation_messages(conversation_id=conversation_id, limit=6, user_id=user_id)
-    user_messages = [m.content for m in recent_messages if m.role == "user"]
-    if user_messages:
-        context.append(f"Recent user focus: {user_messages[-1][:160]}")
+    # Active goals — what they're working toward
+    active_goals = repo.list_goals(user_id=user_id, limit=5)
+    active_goals = [g for g in active_goals if g.status == "active"]
+    if active_goals:
+        goal_text = "; ".join(g.title for g in active_goals[:3])
+        context.append(f"Active goals ({len(active_goals)}): {goal_text}")
 
+    # Recent check-in — how they've been feeling
     recent_checkins = repo.list_checkins(user_id)
     if recent_checkins:
         latest = recent_checkins[0]
@@ -41,6 +66,20 @@ def _build_memory_context(repo: Repository, user_id: str, conversation_id: str) 
             parts.append(f"energy {latest.energy}/10")
         if parts:
             context.append(f"Latest check-in ({latest.date.isoformat()}): " + ", ".join(parts))
+
+        # Flag if no check-in today
+        today = now.date()
+        if latest.date and latest.date < today:
+            days_since = (today - latest.date).days
+            context.append(f"No check-in today (last was {days_since} day(s) ago)")
+    else:
+        context.append("No check-ins recorded yet — user is new")
+
+    # Recent conversation focus
+    recent_messages = repo.list_conversation_messages(conversation_id=conversation_id, limit=6, user_id=user_id)
+    user_messages = [m.content for m in recent_messages if m.role == "user"]
+    if user_messages:
+        context.append(f"Recent user focus: {user_messages[-1][:160]}")
 
     return context
 
