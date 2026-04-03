@@ -33,6 +33,30 @@ class QuestionnaireService:
         """Check if there's an active questionnaire session in this conversation."""
         return self.repo.get_active_questionnaire_session(user_id, conversation_id)
     
+    def _get_effective_questions(
+        self, template: QuestionnaireTemplate, user_id: str
+    ) -> list[QuestionDef]:
+        """Return template questions extended with custom dimension questions for daily check-ins."""
+        questions = list(template.questions)
+        if template.name == "daily_checkin":
+            profile = self.repo.get_user_profile(user_id)
+            if profile and profile.custom_dimensions:
+                for dim in profile.custom_dimensions:
+                    slug = dim["name"].lower().replace(" ", "_")
+                    unit = dim.get("unit", "")
+                    q_text = f"{dim['name']}? ({unit})" if unit else f"{dim['name']}?"
+                    q_type = "numeric" if dim.get("type") in ("numeric", "number") else "text"
+                    questions.append(
+                        QuestionDef(
+                            id=f"custom_{slug}",
+                            question_text=q_text,
+                            question_type=q_type,
+                            required=False,
+                            target_field=f"custom_{slug}",
+                        )
+                    )
+        return questions
+
     def start_questionnaire(
         self, 
         user_id: str, 
@@ -53,6 +77,8 @@ class QuestionnaireService:
         if not template.questions:
             raise ValueError("Template has no questions")
         
+        questions = self._get_effective_questions(template, user_id)
+        
         # Create session
         session = self.repo.create_questionnaire_session(
             QuestionnaireSessionCreate(
@@ -63,12 +89,12 @@ class QuestionnaireService:
         )
         
         # Get first question (skip any that have unsatisfied show_if — unlikely for first questions)
-        first_index = self._find_next_showable_question(template.questions, 0, {})
+        first_index = self._find_next_showable_question(questions, 0, {})
         if first_index is None:
             raise ValueError("Template has no showable questions")
 
-        first_question = template.questions[first_index]
-        visible_total = self._count_visible_questions(template.questions, {})
+        first_question = questions[first_index]
+        visible_total = self._count_visible_questions(questions, {})
         question_text = self._format_question(first_question, template, 1, visible_total)
         
         # If the first showable question is not index 0, update the session
@@ -96,10 +122,12 @@ class QuestionnaireService:
         if not template:
             raise ValueError("Template not found")
         
-        if session.current_question_index >= len(template.questions):
+        questions = self._get_effective_questions(template, session.user_id)
+        
+        if session.current_question_index >= len(questions):
             return None, True  # Already complete
         
-        current_question = template.questions[session.current_question_index]
+        current_question = questions[session.current_question_index]
         
         # Parse the answer
         try:
@@ -129,7 +157,7 @@ class QuestionnaireService:
         
         # Find next showable question (skip those whose show_if condition is not met)
         next_index = self._find_next_showable_question(
-            template.questions,
+            questions,
             session.current_question_index + 1,
             updated_answers,
         )
@@ -139,7 +167,7 @@ class QuestionnaireService:
         self.repo.update_questionnaire_session(
             session.id,
             session.user_id,
-            current_question_index=next_index if not is_complete else len(template.questions),
+            current_question_index=next_index if not is_complete else len(questions),
             answers=updated_answers,
             raw_responses=updated_responses,
             status="completed" if is_complete else "in_progress",
@@ -147,17 +175,17 @@ class QuestionnaireService:
         
         if is_complete:
             # Store structured data based on answers
-            self._store_questionnaire_results(session, template, updated_answers)
-            return self._generate_completion_message(template, updated_answers), True
+            self._store_questionnaire_results(session, template, updated_answers, questions)
+            return self._generate_completion_message(template, updated_answers, questions), True
         else:
             # Ask next question
-            next_question = template.questions[next_index]
+            next_question = questions[next_index]
             answered_so_far = sum(
                 1 for i in range(next_index)
-                if self._should_show_question(template.questions[i], updated_answers)
-                or template.questions[i].id in updated_answers
+                if self._should_show_question(questions[i], updated_answers)
+                or questions[i].id in updated_answers
             )
-            visible_total = self._count_visible_questions(template.questions, updated_answers)
+            visible_total = self._count_visible_questions(questions, updated_answers)
             question_text = self._format_question(
                 next_question, template, answered_so_far + 1, visible_total
             )
@@ -243,9 +271,11 @@ class QuestionnaireService:
         self, 
         session: QuestionnaireSession, 
         template: QuestionnaireTemplate, 
-        answers: dict
+        answers: dict,
+        questions: list[QuestionDef] | None = None,
     ) -> None:
         """Store questionnaire results as appropriate structured data."""
+        questions = questions or list(template.questions)
         now = datetime.now(timezone.utc)
         
         # Create a source document for the questionnaire completion
@@ -268,22 +298,22 @@ class QuestionnaireService:
         # Based on target objects, create appropriate structured data
         if "daily_checkin" in template.target_objects:
             self._create_daily_checkin_from_answers(
-                session.user_id, source.id, now, answers, template.questions
+                session.user_id, source.id, now, answers, questions
             )
         
         if "activity" in template.target_objects:
             self._create_activity_from_answers(
-                session.user_id, source.id, now, answers, template.questions
+                session.user_id, source.id, now, answers, questions
             )
         
         if "metric_observation" in template.target_objects:
             self._create_metrics_from_answers(
-                session.user_id, source.id, now, answers, template.questions
+                session.user_id, source.id, now, answers, questions
             )
 
         if "user_profile" in template.target_objects:
             self._create_user_profile_from_answers(
-                session.user_id, answers, template.questions
+                session.user_id, answers, questions
             )
     
     def _create_daily_checkin_from_answers(self, user_id: str, source_id: str, now: datetime, answers: dict, questions) -> None:
@@ -347,15 +377,18 @@ class QuestionnaireService:
     
     def _create_metrics_from_answers(self, user_id: str, source_id: str, now: datetime, answers: dict, questions) -> None:
         """Create metric observations from numeric answers."""
+        question_map = {q.id: q for q in questions}
         for question_id, answer in answers.items():
             if isinstance(answer, (int, float)):
-                # Create a metric for numeric answers
+                q = question_map.get(question_id)
+                # Use target_field as metric name for custom dims, fall back to question_id
+                metric_name = (q.target_field if q and q.target_field else question_id)
                 self.repo.create_metric_observation(
                     MetricObservationCreate(
                         user_id=user_id,
                         source_document_id=source_id,
                         effective_at=now,
-                        metric_type=question_id,
+                        metric_type=metric_name,
                         value=str(answer),
                         unit="",
                     )
@@ -415,25 +448,33 @@ class QuestionnaireService:
 
     @staticmethod
     def _parse_tracking_preferences(text: str) -> list[dict]:
-        """Convert free-text tracking preferences into custom dimension dicts."""
+        """Convert free-text tracking preferences into custom dimension dicts.
+
+        Predefined dimensions (sleep, mood, energy, etc.) are already covered
+        by the daily check-in template, so only truly custom items are returned.
+        """
         if not text:
             return []
-        known = {
-            "sleep": "sleep", "mood": "mood", "energy": "energy",
-            "weight": "weight", "stress": "stress", "soreness": "soreness",
-            "dreams": "dreams", "hydration": "hydration",
-            "1": "sleep", "2": "mood", "3": "energy", "4": "weight",
-            "5": "stress", "6": "soreness", "7": "dreams", "8": "hydration",
+        PREDEFINED = {
+            "1": "sleep", "sleep": "sleep",
+            "2": "mood", "mood": "mood",
+            "3": "energy", "energy": "energy",
+            "4": "weight", "weight": "weight",
+            "5": "stress", "stress": "stress",
+            "6": "soreness", "soreness": "soreness",
+            "7": "dreams", "dreams": "dreams",
+            "8": "hydration", "hydration": "hydration",
         }
-        dims: list[dict] = []
         parts = [p.strip().lower() for p in text.replace(",", " ").split() if p.strip()]
+        customs: list[dict] = []
         seen: set[str] = set()
         for part in parts:
-            name = known.get(part, part)
-            if name not in seen:
-                dims.append({"name": name, "type": "number"})
-                seen.add(name)
-        return dims
+            if part in PREDEFINED:
+                continue  # Predefined — already in the check-in template
+            if part not in seen:
+                customs.append({"name": part, "unit": "", "type": "numeric"})
+                seen.add(part)
+        return customs
 
     def _create_goals_from_text(self, user_id: str, text: str) -> None:
         """Create Goal objects from comma/newline separated text."""
@@ -448,11 +489,17 @@ class QuestionnaireService:
                     priority="medium",
                 ))
     
-    def _generate_completion_message(self, template: QuestionnaireTemplate, answers: dict) -> str:
+    def _generate_completion_message(
+        self,
+        template: QuestionnaireTemplate,
+        answers: dict,
+        questions: list[QuestionDef] | None = None,
+    ) -> str:
         """Generate a completion message summarizing the questionnaire."""
+        questions = questions or list(template.questions)
         summary_parts = []
         
-        for question in template.questions:
+        for question in questions:
             answer = answers.get(question.id)
             if answer is not None:
                 if question.question_type == "scale":
