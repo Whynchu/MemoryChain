@@ -189,6 +189,10 @@ def handle_chat(repo: Repository, payload: ChatRequest) -> ChatResponse:
     # ── Phase 5: Intent-aware routing ──────────────────────
     classification = classify_intent(payload.message)
 
+    # Close active log session on non-log intent
+    if classification.intent != "log":
+        repo.close_log_session(conversation.id)
+
     # Store user message in conversation history (always, for all intents)
     repo.append_conversation_message(
         conversation_id=conversation.id,
@@ -218,16 +222,41 @@ def _handle_log(
     history_lines: list[str],
 ) -> ChatResponse:
     """LOG intent: extract data, store everything, confirm what was stored."""
-    source = repo.create_source_document(
-        SourceDocumentCreate(
-            user_id=payload.user_id,
-            source_type="chat_message",
-            effective_at=now,
-            title="Chat message",
-            raw_text=payload.message,
-            metadata={"conversation_id": conversation.id},
+
+    # Check for active log session in this conversation
+    active_source = repo.find_active_log_source(conversation_id=conversation.id)
+
+    if active_source:
+        msg_count = active_source.metadata.get("log_message_count", 1)
+        if msg_count >= 10:
+            active_source = None  # Force new session
+
+    if active_source:
+        # ── APPEND mode: extend existing log session ──
+        source = repo.update_source_document_text(
+            active_source.id, payload.message, now
         )
-    )
+        new_count = active_source.metadata.get("log_message_count", 1) + 1
+        repo.update_source_document_metadata(source.id, {
+            **active_source.metadata,
+            "log_message_count": new_count,
+        })
+    else:
+        # ── CREATE mode: start new log session ──
+        source = repo.create_source_document(
+            SourceDocumentCreate(
+                user_id=payload.user_id,
+                source_type="chat_message",
+                effective_at=now,
+                title="Chat message",
+                raw_text=payload.message,
+                metadata={
+                    "conversation_id": conversation.id,
+                    "log_session_active": True,
+                    "log_message_count": 1,
+                },
+            )
+        )
 
     extraction = extract_objects(
         raw_text=payload.message,
@@ -239,7 +268,16 @@ def _handle_log(
         provider="hybrid",
     )
 
-    journal = repo.create_journal_entry(extraction.journal_entry) if extraction.journal_entry else None
+    # Handle journal entry — append if one exists for this source, else create
+    journal = None
+    if extraction.journal_entry:
+        existing_journal = repo.find_journal_by_source(source.id)
+        if existing_journal:
+            repo.update_journal_entry_text(existing_journal.id, extraction.journal_entry.text)
+            journal = existing_journal
+        else:
+            journal = repo.create_journal_entry(extraction.journal_entry)
+
     checkin = repo.create_checkin(extraction.checkin) if extraction.checkin else None
     goals = [repo.create_goal(g) for g in extraction.goals]
     tasks = [repo.create_task(t) for t in extraction.tasks]

@@ -268,6 +268,7 @@ class TestChatRouter:
         source_doc = MagicMock()
         source_doc.id = "src_1"
         mock_repo.create_source_document.return_value = source_doc
+        mock_repo.find_active_log_source.return_value = None
 
         payload = ChatRequest(user_id="u1", message="Slept 7h, mood 8/10")
         response = handle_chat(mock_repo, payload)

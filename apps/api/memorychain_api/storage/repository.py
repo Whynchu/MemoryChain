@@ -112,6 +112,122 @@ class Repository:
         self.conn.commit()
         return self.get_source_by_hash(content_hash)  # type: ignore[return-value]
 
+    def get_source_document(self, source_id: str) -> SourceDocument | None:
+        """Get a source document by ID."""
+        row = self.conn.execute(
+            "SELECT * FROM source_documents WHERE id = ?", (source_id,),
+        ).fetchone()
+        return self._row_to_source(row) if row else None
+
+    def update_source_document_text(
+        self, source_id: str, additional_text: str, effective_at: datetime
+    ) -> SourceDocument:
+        """Append text to an existing source document, update hash and search index."""
+        row = self.conn.execute(
+            "SELECT raw_text, user_id, title FROM source_documents WHERE id = ?",
+            (source_id,),
+        ).fetchone()
+        if not row:
+            raise ValueError(f"Source document {source_id} not found")
+
+        combined_text = row[0] + "\n\n" + additional_text
+        new_hash = _hash_source(combined_text, effective_at)
+
+        self.conn.execute(
+            "UPDATE source_documents SET raw_text = ?, content_hash = ? WHERE id = ?",
+            (combined_text, new_hash, source_id),
+        )
+        self.conn.execute(
+            "DELETE FROM search_index WHERE object_id = ? AND object_type = 'source_document'",
+            (source_id,),
+        )
+        self._index_for_search(
+            object_type="source_document",
+            object_id=source_id,
+            user_id=row[1],
+            content=f"{row[2] or ''} {combined_text}",
+            effective_at=effective_at.isoformat(),
+        )
+        self.conn.commit()
+        return self.get_source_document(source_id)  # type: ignore[return-value]
+
+    def update_source_document_metadata(self, source_id: str, metadata: dict) -> None:
+        """Update the metadata JSON of a source document."""
+        self.conn.execute(
+            "UPDATE source_documents SET metadata_json = ? WHERE id = ?",
+            (_to_json(metadata), source_id),
+        )
+        self.conn.commit()
+
+    def find_active_log_source(
+        self, conversation_id: str, max_age_minutes: int = 30
+    ) -> SourceDocument | None:
+        """Find the most recent active log session source document for a conversation."""
+        row = self.conn.execute(
+            """SELECT * FROM source_documents
+               WHERE json_extract(metadata_json, '$.conversation_id') = ?
+               AND json_extract(metadata_json, '$.log_session_active') = 1
+               AND source_type = 'chat_message'
+               ORDER BY created_at DESC LIMIT 1""",
+            (conversation_id,),
+        ).fetchone()
+        if not row:
+            return None
+
+        source = self._row_to_source(row)
+        created = source.created_at
+        if created.tzinfo is None:
+            created = created.replace(tzinfo=timezone.utc)
+        age_seconds = (datetime.now(timezone.utc) - created).total_seconds()
+        if age_seconds > max_age_minutes * 60:
+            return None
+        return source
+
+    def close_log_session(self, conversation_id: str) -> None:
+        """Mark any active log session for this conversation as closed."""
+        self.conn.execute(
+            """UPDATE source_documents
+               SET metadata_json = json_set(metadata_json, '$.log_session_active', 0)
+               WHERE json_extract(metadata_json, '$.conversation_id') = ?
+               AND json_extract(metadata_json, '$.log_session_active') = 1""",
+            (conversation_id,),
+        )
+        self.conn.commit()
+
+    def find_journal_by_source(self, source_document_id: str) -> JournalEntry | None:
+        """Find journal entry linked to a source document."""
+        row = self.conn.execute(
+            "SELECT * FROM journal_entries WHERE source_document_id = ? LIMIT 1",
+            (source_document_id,),
+        ).fetchone()
+        return self._row_to_journal(row) if row else None
+
+    def update_journal_entry_text(self, journal_id: str, additional_text: str) -> None:
+        """Append text to an existing journal entry and update search index."""
+        row = self.conn.execute(
+            "SELECT text, user_id, title, effective_at FROM journal_entries WHERE id = ?",
+            (journal_id,),
+        ).fetchone()
+        if not row:
+            return
+        combined = row[0] + "\n\n" + additional_text
+        self.conn.execute(
+            "UPDATE journal_entries SET text = ? WHERE id = ?",
+            (combined, journal_id),
+        )
+        self.conn.execute(
+            "DELETE FROM search_index WHERE object_id = ? AND object_type = 'journal_entry'",
+            (journal_id,),
+        )
+        self._index_for_search(
+            object_type="journal_entry",
+            object_id=journal_id,
+            user_id=row[1],
+            content=f"{row[2] or ''} {combined}",
+            effective_at=row[3],
+        )
+        self.conn.commit()
+
     def create_journal_entry(self, payload: JournalEntryCreate) -> JournalEntry:
         now = _now_iso()
         entry_id = _new_id("je")
