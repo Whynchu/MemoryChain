@@ -34,10 +34,14 @@ from .display import (
 )
 
 
-@click.group()
-@click.version_option("0.1.0", prog_name="memorychain")
-def cli() -> None:
+@click.group(invoke_without_command=True)
+@click.version_option("0.2.0", prog_name="memorychain")
+@click.pass_context
+def cli(ctx: click.Context) -> None:
     """MemoryChain — personal memory and execution backend."""
+    if ctx.invoked_subcommand is None:
+        from .repl import run_repl
+        run_repl()
 
 
 # ── log ──────────────────────────────────────────────────────
