@@ -60,29 +60,31 @@ def show_chat_response(data: dict[str, Any]) -> None:
     reply = data.get("assistant_message", "")
     extraction = data.get("extraction", {})
 
-    console.print()
-    console.print(Panel(reply, border_style=BLUE, padding=(1, 2)))
+    has_data = bool(extraction) and (
+        extraction.get("source_document_id")
+        or extraction.get("journal_entry_id")
+        or extraction.get("checkin_id")
+        or extraction.get("task_ids")
+        or extraction.get("goal_ids")
+        or extraction.get("activity_ids")
+        or extraction.get("metric_ids")
+    )
 
-    # Only show extraction details if something was actually stored
-    if extraction:
-        has_data = (
-            extraction.get("source_document_id")
-            or extraction.get("journal_entry_id")
-            or extraction.get("checkin_id")
-            or extraction.get("task_ids")
-            or extraction.get("goal_ids")
-            or extraction.get("activity_ids")
-            or extraction.get("metric_ids")
-        )
-        if has_data:
-            console.print()
-            _extraction_line("Source Document", extraction.get("source_document_id"))
-            _extraction_line("Journal Entry", extraction.get("journal_entry_id"))
-            _extraction_line("Check-in", extraction.get("checkin_id"))
-            _extraction_list("Tasks", extraction.get("task_ids", []))
-            _extraction_list("Goals", extraction.get("goal_ids", []))
-            _extraction_list("Activities", extraction.get("activity_ids", []))
-            _extraction_list("Metrics", extraction.get("metric_ids", []))
+    console.print()
+    if has_data:
+        # Log response — bordered panel + extraction details
+        console.print(Panel(reply, border_style=BLUE, padding=(1, 2)))
+        console.print()
+        _extraction_line("Source Document", extraction.get("source_document_id"))
+        _extraction_line("Journal Entry", extraction.get("journal_entry_id"))
+        _extraction_line("Check-in", extraction.get("checkin_id"))
+        _extraction_list("Tasks", extraction.get("task_ids", []))
+        _extraction_list("Goals", extraction.get("goal_ids", []))
+        _extraction_list("Activities", extraction.get("activity_ids", []))
+        _extraction_list("Metrics", extraction.get("metric_ids", []))
+    else:
+        # Chat/query response — just text, no box
+        console.print(f"  [{BLUE_BRIGHT}]›[/{BLUE_BRIGHT}] {reply}")
     console.print()
 
 
