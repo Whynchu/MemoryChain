@@ -1,6 +1,6 @@
 # MemoryChain — Roadmap to MVP
 
-**Current state: V0.6.0-dev — Phases 0–2 complete. 58 checkins, 64 tests. Phase 3 next.**
+**Current state: V0.7.0-dev — Phases 0–3 complete. 58 checkins, 82 tests. Phase 4 next.**
 
 This document defines the work remaining to reach a usable MVP. Phases are
 ordered by dependency — each unlocks the next.
@@ -57,36 +57,17 @@ and `mood` populated. This is the dataset Phase 2 detectors run against.
 
 ---
 
-## Phase 3: Weekly Review + Audit Expansion
+<details>
+<summary><strong>Phase 3: Weekly Review + Audit Expansion ✅</strong> (commit <code>e7f1250</code>)</summary>
 
-### 3.1 Weekly Review Improvements
-
-Current state: deterministic aggregation. Upgrade to include:
-- Top insights (if any) surfaced during the review period
-- Activity summaries (session counts, strike totals, training types)
-- Specific entry references ("On April 12, you noted…")
-- Sparse-data flags ("No check-in on Tuesday — was that intentional?")
-
-### 3.2 LLM Summary Layer
-
-After computing structured facts, pass to LLM for human-readable narrative:
-- Use GPT-4o (not mini) — quality matters for user-facing prose
-- Store both structured facts and LLM summary
-- Prompt enforces evidence grounding: "Only make claims supported by the data"
-
-### 3.3 Audit Trail Expansion
-
-Extend audit logging beyond goals/tasks to cover:
-- Journal entries, checkins, activities, metric observations
-- Insight status changes (candidate → active → rejected → promoted)
-- Heuristic lifecycle (activate, deactivate, update)
-
-### Definition of Done — Phase 3
-
-- [ ] Weekly reviews include insight mentions and activity summaries
-- [ ] LLM narrative is human-readable, not a data dump
-- [ ] All object types have audit trail on modification
-- [ ] Reviews from real WHYNN data manually reviewed for quality
+- Enriched weekly reviews: insight_mentions, activity_summary, metric_highlights, sparse_data_flags, notable_entries
+- Optional LLM narrative layer (GPT-4o) with evidence-grounded prompting; graceful fallback to deterministic summary
+- Average sleep included in summary text alongside mood
+- Audit trail expanded: insight creation, heuristic creation, insight status changes
+- New repo methods: get_activities_for_week, get_metrics_for_week, get_insights_for_week
+- DB migrations for 6 new weekly_reviews columns (idempotent)
+- 18 new tests (82 total) covering helpers, LLM mock, enriched reviews, audit expansion
+</details>
 
 ---
 

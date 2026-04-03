@@ -6,7 +6,7 @@ A digital partner that lives alongside you, knows your habits, tracks your metri
 
 MemoryChain separates *observations* (what happened) from *interpretations* (patterns) from *operational rules* (what to do about it). Casual conversation never accidentally becomes an execution constraint — but real patterns get surfaced and tracked.
 
-**Current state:** v0.6.0-dev — 64 passing tests, 58 daily checkins. Phases 0–2 complete (foundation, questionnaires, hybrid extraction, WHYNN import, insight detection engine). Building Phase 3: weekly review + audit expansion.
+**Current state:** v0.7.0-dev — 82 passing tests, 58 daily checkins. Phases 0–3 complete (foundation, questionnaires, hybrid extraction, WHYNN import, insight detection, enriched reviews, audit expansion). Building Phase 4: CLI tool and daily workflow.
 
 ---
 
@@ -109,7 +109,7 @@ export OPENAI_API_KEY=sk-...
 python -m uvicorn memorychain_api.main:app --reload
 
 # Test
-pytest tests/ -v  # 64 tests
+pytest tests/ -v  # 82 tests
 ```
 
 **API at** `http://localhost:8000` — Docs at `http://localhost:8000/docs` — Auth: `X-API-Key: dev-key`
