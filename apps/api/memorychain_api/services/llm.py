@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Iterable, Literal
 
 from ..config import settings
@@ -17,7 +18,7 @@ except (ImportError, AttributeError):
     openai_client = None
 
 
-ReplyMode = Literal["log", "query", "chat"]
+ReplyMode = Literal["log", "query", "chat", "companion"]
 
 
 # ── System prompts per intent ────────────────────────────────
@@ -54,6 +55,101 @@ _SYSTEM_PROMPTS: dict[ReplyMode, str] = {
         "You can explain what MemoryChain does if asked. "
         "Don't claim to have logged anything. Don't invent past events. " + _CONTEXT_INSTRUCTION
     ),
+    "companion": (
+        "You are MemoryChain acting as an operational companion, not generic chat. "
+        "You have already been given the active thread, rationale, signals, and primary action. "
+        "Your reply must follow that thread directly. "
+        "If a primary action exists, center the reply on it instead of asking a generic social question. "
+        "For brief openings like 'hey', you must lead decisively with the highest-priority thread. "
+        "Keep it to 1-3 sentences. One strong question or one clear reflection plus one question. "
+        "Do not ignore stale tasks, missing check-ins, discrepancies, or pattern pressure when they are in context. "
+        "Do not produce generic greetings like 'How's your evening going?' unless the active thread is general. "
+        "Do not claim to have logged anything unless an execution note says so. "
+        + _CONTEXT_INSTRUCTION
+    ),
+}
+
+
+_MINIMAL_OPENING_RE = re.compile(
+    r"^\s*(?:hey|hi|hello|yo|sup|morning|good morning|good evening|evening|afternoon|continue)\b[!?.\s]*$",
+    re.I,
+)
+_GENERIC_COMPANION_RE = re.compile(
+    r"(?:how(?:'s| is) your (?:day|evening|morning|afternoon) going|what(?:'s| is) on your mind)",
+    re.I,
+)
+_COMPANION_META_FOCUS = {
+    "sleep_hours",
+    "mood",
+    "energy",
+    "stress_level",
+    "missing_detail",
+    "continuity",
+    "friction",
+    "today_state",
+    "minimum_viable_win",
+    "next_commitment",
+    "pattern_interrupt",
+    "alignment_commitment",
+    "daily_commitment",
+    "commitment",
+}
+_TOKEN_STOPWORDS = {
+    "a",
+    "an",
+    "and",
+    "are",
+    "as",
+    "at",
+    "be",
+    "before",
+    "but",
+    "cleanly",
+    "concrete",
+    "decide",
+    "for",
+    "get",
+    "give",
+    "i",
+    "if",
+    "in",
+    "into",
+    "is",
+    "it",
+    "its",
+    "just",
+    "keep",
+    "let",
+    "make",
+    "me",
+    "most",
+    "my",
+    "now",
+    "of",
+    "on",
+    "or",
+    "real",
+    "restate",
+    "should",
+    "smallest",
+    "still",
+    "that",
+    "the",
+    "their",
+    "them",
+    "there",
+    "this",
+    "to",
+    "today",
+    "up",
+    "version",
+    "what",
+    "whether",
+    "while",
+    "with",
+    "would",
+    "you",
+    "your",
 }
 
 
@@ -228,6 +324,97 @@ def _local_reply_companion(
     )
 
 
+def _normalize_companion_text(text: str) -> str:
+    return re.sub(r"\s+", " ", text.strip().lower())
+
+
+def _significant_tokens(text: str) -> set[str]:
+    return {
+        token
+        for token in re.findall(r"[a-z0-9]+", text.lower())
+        if len(token) >= 3 and token not in _TOKEN_STOPWORDS
+    }
+
+
+def _visible_focus_items(directive: CompanionDirective) -> list[str]:
+    if not directive.actions:
+        return []
+    visible: list[str] = []
+    for item in getattr(directive.actions[0], "focus_items", []):
+        cleaned = item.strip().strip("`")
+        if not cleaned or ":" in cleaned or cleaned in _COMPANION_META_FOCUS:
+            continue
+        visible.append(cleaned)
+    return visible
+
+
+def _companion_reply_matches_directive(
+    *,
+    reply: str,
+    directive: CompanionDirective,
+    execution_note: str | None,
+) -> bool:
+    if execution_note is not None or not directive.actions:
+        return True
+
+    normalized_reply = _normalize_companion_text(reply)
+    if _GENERIC_COMPANION_RE.search(normalized_reply):
+        return False
+
+    primary_action = directive.actions[0]
+    prompt_tokens = _significant_tokens(primary_action.prompt)
+    reply_tokens = _significant_tokens(reply)
+    overlap = prompt_tokens & reply_tokens
+
+    focus_items = _visible_focus_items(directive)
+    mentions_focus = any(_normalize_companion_text(item) in normalized_reply for item in focus_items)
+
+    min_overlap = 1 if len(prompt_tokens) <= 4 else 2
+    if len(overlap) < min_overlap and not mentions_focus:
+        return False
+
+    if directive.active_thread == "daily_checkin":
+        return any(token in normalized_reply for token in ("sleep", "mood", "energy"))
+
+    if directive.active_thread == "stale_commitment":
+        return mentions_focus or "commitment" in normalized_reply or "task" in normalized_reply
+
+    if directive.active_thread == "goal_alignment":
+        return mentions_focus or any(
+            phrase in normalized_reply
+            for phrase in ("follow-through", "follow through", "mismatch", "intention", "alignment")
+        )
+
+    if directive.active_thread == "pattern_review":
+        return mentions_focus or "pattern" in normalized_reply
+
+    if directive.active_thread == "continuity_gap":
+        return any(token in normalized_reply for token in ("continuity", "drift", "momentum", "today"))
+
+    if directive.active_thread == "daily_focus":
+        return mentions_focus or any(token in normalized_reply for token in ("focus", "priority", "revolve"))
+
+    return True
+
+
+def _should_force_local_companion_reply(
+    *,
+    user_message: str,
+    directive: CompanionDirective,
+    execution_note: str | None,
+) -> bool:
+    if execution_note is not None:
+        return True
+
+    if not directive.actions:
+        return False
+
+    if directive.active_thread == "general":
+        return False
+
+    return False
+
+
 # ── OpenAI replies ───────────────────────────────────────────
 
 def _openai_reply(
@@ -328,6 +515,17 @@ def generate_companion_reply(
 ) -> str:
     """Generate a companion-style reply driven by a deterministic directive."""
     history = list(history_lines)
+    local_reply = _local_reply_companion(user_message=user_message, snapshot=snapshot, directive=directive)
+
+    if _should_force_local_companion_reply(
+        user_message=user_message,
+        directive=directive,
+        execution_note=execution_note,
+    ):
+        if execution_note:
+            return f"{execution_note} {local_reply}"
+        return local_reply
+
     context_lines = snapshot.to_memory_context()
     context_lines.append(f"Companion mode: {directive.mode}")
     context_lines.append(f"Active thread: {directive.active_thread}")
@@ -348,12 +546,15 @@ def generate_companion_reply(
     if execution_note:
         context_lines.append(f"Execution note: {execution_note}")
     context = "\n".join(f"- {line}" for line in context_lines)
-    llm = _openai_reply(mode="chat", user_message=user_message, context_block=context, history_lines=history)
-    if llm:
+    llm = _openai_reply(mode="companion", user_message=user_message, context_block=context, history_lines=history)
+    if llm and _companion_reply_matches_directive(
+        reply=llm,
+        directive=directive,
+        execution_note=execution_note,
+    ):
         if execution_note:
             return f"{execution_note} {llm}"
         return llm
-    reply = _local_reply_companion(user_message=user_message, snapshot=snapshot, directive=directive)
     if execution_note:
-        return f"{execution_note} {reply}"
-    return reply
+        return f"{execution_note} {local_reply}"
+    return local_reply
