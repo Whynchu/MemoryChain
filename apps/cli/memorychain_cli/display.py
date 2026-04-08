@@ -59,23 +59,24 @@ def status_badge(status: str) -> Text:
 def show_chat_response(data: dict[str, Any]) -> None:
     reply = data.get("assistant_message", "")
     extraction = data.get("extraction", {})
+    companion = data.get("companion") or {}
+    active_thread = companion.get("active_thread")
 
-    has_data = bool(extraction) and (
-        extraction.get("source_document_id")
-        or extraction.get("journal_entry_id")
+    has_structured_extractions = bool(extraction) and (
+        extraction.get("journal_entry_id")
         or extraction.get("checkin_id")
         or extraction.get("task_ids")
         or extraction.get("goal_ids")
         or extraction.get("activity_ids")
         or extraction.get("metric_ids")
     )
+    should_use_chat_layout = active_thread == "questionnaire" or not has_structured_extractions
 
     console.print()
-    if has_data:
+    if not should_use_chat_layout:
         # Log response — bordered panel + extraction details
         console.print(Panel(reply, border_style=BLUE, padding=(1, 2)))
         console.print()
-        _extraction_line("Source Document", extraction.get("source_document_id"))
         _extraction_line("Journal Entry", extraction.get("journal_entry_id"))
         _extraction_line("Check-in", extraction.get("checkin_id"))
         _extraction_list("Tasks", extraction.get("task_ids", []))

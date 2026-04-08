@@ -6,7 +6,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from memorychain_cli.repl import _ExitREPL, _handle_chat, _handle_slash
+from memorychain_cli.repl import _ExitREPL, _check_onboarding, _handle_chat, _handle_slash
+from memorychain_cli.display import show_chat_response
 
 
 def _mock_response(json_data, status_code: int = 200):
@@ -188,3 +189,67 @@ class TestChatHandler:
         with patch("memorychain_cli.client.httpx.post", side_effect=_httpx.ConnectError("refused")):
             result = _handle_chat("test", "conv-existing")
             assert result == "conv-existing"  # preserved despite error
+
+
+class TestOnboardingStartup:
+    def test_check_onboarding_starts_questionnaire_and_returns_conversation_id(self) -> None:
+        with patch("memorychain_cli.client.get_user_profile", return_value={"onboarded": False}), \
+             patch("prompt_toolkit.prompt", return_value="y"), \
+             patch("memorychain_cli.repl._handle_chat", return_value="conv-onboard") as mock_handle_chat:
+            result = _check_onboarding()
+
+        assert result == "conv-onboard"
+        mock_handle_chat.assert_called_once_with("/onboard", None)
+
+    def test_check_onboarding_skips_when_declined(self) -> None:
+        with patch("memorychain_cli.client.get_user_profile", return_value={"onboarded": False}), \
+             patch("prompt_toolkit.prompt", return_value="n"), \
+             patch("memorychain_cli.repl._handle_chat") as mock_handle_chat:
+            result = _check_onboarding()
+
+        assert result is None
+        mock_handle_chat.assert_not_called()
+
+
+class TestChatDisplay:
+    def test_questionnaire_prompt_does_not_use_boxed_log_layout(self, capsys) -> None:
+        show_chat_response(
+            {
+                "assistant_message": "Starting **onboarding**\n\n**What should I call you?**",
+                "extraction": {
+                    "source_document_id": "src_1234",
+                    "journal_entry_id": None,
+                    "checkin_id": None,
+                    "task_ids": [],
+                    "goal_ids": [],
+                    "activity_ids": [],
+                    "metric_ids": [],
+                },
+                "companion": {
+                    "active_thread": "questionnaire",
+                },
+            }
+        )
+        output = capsys.readouterr().out
+        assert "What should I call you?" in output
+        assert "Source Document" not in output
+
+    def test_source_document_alone_does_not_trigger_log_layout(self, capsys) -> None:
+        show_chat_response(
+            {
+                "assistant_message": "Next question?",
+                "extraction": {
+                    "source_document_id": "src_5678",
+                    "journal_entry_id": None,
+                    "checkin_id": None,
+                    "task_ids": [],
+                    "goal_ids": [],
+                    "activity_ids": [],
+                    "metric_ids": [],
+                },
+                "companion": None,
+            }
+        )
+        output = capsys.readouterr().out
+        assert "Next question?" in output
+        assert "Source Document" not in output

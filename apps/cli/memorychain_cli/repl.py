@@ -131,7 +131,7 @@ def _build_header() -> Panel:
     )
 
 
-def _print_welcome() -> None:
+def _print_welcome() -> str | None:
     """Full terminal takeover: clear screen, set title, show branded header."""
     set_title("MemoryChain")
     clear_screen()
@@ -142,19 +142,20 @@ def _print_welcome() -> None:
     check_and_prompt_setup()
 
     # Check if user needs onboarding
-    _check_onboarding()
+    conversation_id = _check_onboarding()
 
     console.print()
+    return conversation_id
 
 
-def _check_onboarding() -> None:
+def _check_onboarding() -> str | None:
     """If user hasn't completed onboarding, offer to start it."""
     try:
         profile = client.get_user_profile()
         if profile and profile.get("onboarded_at"):
-            return  # Already onboarded
+            return None  # Already onboarded
     except Exception:
-        return  # API not connected or no profile endpoint yet
+        return None  # API not connected or no profile endpoint yet
 
     console.print()
     console.print(f"  [{BLUE_BRIGHT}]Welcome to MemoryChain![/{BLUE_BRIGHT}] Let's get you set up.")
@@ -166,13 +167,15 @@ def _check_onboarding() -> None:
         answer = pt_prompt("  Start onboarding? (Y/n): ").strip().lower()
     except (EOFError, KeyboardInterrupt):
         console.print()
-        return
+        return None
 
     if answer in ("", "y", "yes"):
         console.print(f"  [{GREY_MID}]Starting onboarding… type your answers to each question.[/{GREY_MID}]")
         console.print(f"  [{GREY_MID}]Use /onboard in the prompt if you want to restart later.[/{GREY_MID}]")
+        return _handle_chat("/onboard", None)
     else:
         console.print(f"  [{GREY_MID}]No problem! You can start anytime with /onboard[/{GREY_MID}]")
+        return None
 
 
 def _build_prompt() -> HTML:
@@ -341,7 +344,7 @@ class _ExitREPL(Exception):
 
 def run_repl() -> None:
     """Main interactive loop — full terminal takeover experience."""
-    _print_welcome()
+    conversation_id = _print_welcome()
 
     completer = WordCompleter(SLASH_COMMANDS, sentence=True)
     session: PromptSession[str] = PromptSession(
@@ -351,8 +354,6 @@ def run_repl() -> None:
         bottom_toolbar=_bottom_toolbar,
         style=PT_STYLE,
     )
-
-    conversation_id: str | None = None
 
     while True:
         try:

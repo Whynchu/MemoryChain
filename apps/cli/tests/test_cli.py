@@ -89,7 +89,8 @@ class TestLog:
             mock_post.return_value = _mock_response(chat_resp)
             result = runner.invoke(cli, ["log", "-y", "just thinking out loud"])
             assert result.exit_code == 0
-            assert "Source Document" in result.output
+            assert "Interesting thought." in result.output
+            assert "Source Document" not in result.output
 
     def test_log_connection_error(self, runner: CliRunner) -> None:
         import httpx as _httpx
