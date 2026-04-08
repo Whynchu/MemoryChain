@@ -3,79 +3,99 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from ..schemas import (
+    CompanionAction,
+    CompanionDirective,
     ChatRequest,
     ChatResponse,
     ExtractionSummary,
     SourceDocumentCreate,
 )
 from ..storage.repository import Repository
-from .extraction import extract_objects, is_substantive
-from .intent import classify_intent
-from .llm import generate_chat_reply, generate_log_reply, generate_query_reply
+from .companion_actions import build_companion_actions
+from .companion_execution import CompanionExecutionResult, execute_pending_companion
+from .companion_orchestrator import orchestrate_companion
+from .companion_state import (
+    advance_pending_companion,
+    apply_pending_action_intent,
+    load_pending_companion,
+    persist_pending_companion,
+    should_consume_pending_companion,
+)
+from .context_snapshot import build_context_snapshot
+from .extraction import extract_objects
+from .intent import ClassificationResult, classify_intent
+from .llm import generate_companion_reply, generate_log_reply, generate_query_reply
 from .query_handler import handle_query
 from .questionnaire import QuestionnaireService, is_questionnaire_command
 
 
-def _build_memory_context(repo: Repository, user_id: str, conversation_id: str) -> list[str]:
-    context: list[str] = []
-    now = datetime.now()
+def _questionnaire_companion() -> CompanionDirective:
+    return CompanionDirective(
+        mode="intake",
+        active_thread="questionnaire",
+        rationale=["Questionnaire flow is active, so structured intake takes precedence."],
+        signals=[],
+        actions=[
+            CompanionAction(
+                kind="clarify",
+                prompt="Answer the current questionnaire prompt directly so I can keep the intake clean.",
+                reason="A questionnaire session is already in progress.",
+                expected_response="questionnaire_answer",
+            )
+        ],
+    )
 
-    # Time awareness — local time, day of week, time-of-day period
-    day_name = now.strftime("%A")
-    time_str = now.strftime("%I:%M %p").lstrip("0")
-    hour = now.hour
-    if hour < 6:
-        period = "late night"
-    elif hour < 9:
-        period = "early morning"
-    elif hour < 12:
-        period = "morning"
-    elif hour < 14:
-        period = "early afternoon"
-    elif hour < 17:
-        period = "afternoon"
-    elif hour < 20:
-        period = "evening"
-    else:
-        period = "night"
-    context.append(f"Current time: {day_name} {time_str} ({period})")
 
-    # Open tasks — what's on the user's plate
-    open_tasks = repo.list_open_tasks(user_id=user_id, limit=5)
-    if open_tasks:
-        task_text = "; ".join(task.title for task in open_tasks[:3])
-        context.append(f"Open tasks ({len(open_tasks)}): {task_text}")
+def _build_companion(
+    *,
+    user_message: str,
+    classification: ClassificationResult,
+    snapshot,
+) -> CompanionDirective:
+    companion = orchestrate_companion(
+        user_message=user_message,
+        classification=classification,
+        snapshot=snapshot,
+    )
+    companion.actions = build_companion_actions(
+        user_message=user_message,
+        snapshot=snapshot,
+        directive=companion,
+    )
+    return companion
 
-    # Active goals — what they're working toward
-    active_goals = repo.list_goals(user_id=user_id, limit=5)
-    active_goals = [g for g in active_goals if g.status == "active"]
-    if active_goals:
-        goal_text = "; ".join(g.title for g in active_goals[:3])
-        context.append(f"Active goals ({len(active_goals)}): {goal_text}")
 
-    # Recent check-in — how they've been feeling
-    recent_checkins = repo.list_checkins(user_id)
-    if recent_checkins:
-        latest = recent_checkins[0]
-        parts: list[str] = []
-        if latest.sleep_hours is not None:
-            parts.append(f"sleep {latest.sleep_hours}h")
-        if latest.mood is not None:
-            parts.append(f"mood {latest.mood}/10")
-        if latest.energy is not None:
-            parts.append(f"energy {latest.energy}/10")
-        if parts:
-            context.append(f"Latest check-in ({latest.date.isoformat()}): " + ", ".join(parts))
+def _continue_companion(snapshot) -> CompanionDirective:
+    return _build_companion(
+        user_message="continue",
+        classification=ClassificationResult(
+            intent="chat",
+            confidence=1.0,
+            reasoning="advance companion thread",
+        ),
+        snapshot=snapshot,
+    )
 
-        # Flag if no check-in today
-        today = now.date()
-        if latest.date and latest.date < today:
-            days_since = (today - latest.date).days
-            context.append(f"No check-in today (last was {days_since} day(s) ago)")
-    else:
-        context.append("No check-ins recorded yet — user is new")
 
-    return context
+def _resolve_companion_after_pending(
+    *,
+    pending_companion: CompanionDirective,
+    snapshot,
+    execution: CompanionExecutionResult | None,
+) -> CompanionDirective:
+    if execution is None:
+        return advance_pending_companion(
+            pending=pending_companion,
+            snapshot=snapshot,
+        ) or _continue_companion(snapshot)
+    if execution is not None and execution.keep_pending:
+        return pending_companion
+    if execution is not None and execution.should_advance:
+        return advance_pending_companion(
+            pending=pending_companion,
+            snapshot=snapshot,
+        ) or _continue_companion(snapshot)
+    return _continue_companion(snapshot)
 
 
 def handle_chat(repo: Repository, payload: ChatRequest) -> ChatResponse:
@@ -85,6 +105,7 @@ def handle_chat(repo: Repository, payload: ChatRequest) -> ChatResponse:
         conversation_id=payload.conversation_id,
         title="MemoryChain Chat",
     )
+    pending_companion = load_pending_companion(conversation)
 
     # Check for active questionnaire session first
     q_service = QuestionnaireService(repo)
@@ -123,6 +144,13 @@ def handle_chat(repo: Repository, payload: ChatRequest) -> ChatResponse:
             role="assistant",
             content=assistant_text,
         )
+        questionnaire_companion = _questionnaire_companion()
+        persist_pending_companion(
+            repo=repo,
+            conversation=conversation,
+            user_id=payload.user_id,
+            companion=questionnaire_companion,
+        )
         
         return ChatResponse(
             conversation_id=conversation.id,
@@ -130,6 +158,7 @@ def handle_chat(repo: Repository, payload: ChatRequest) -> ChatResponse:
             assistant_message_id=assistant_msg.id,
             extraction=ExtractionSummary(source_document_id=source.id),
             memory_context=[],
+            companion=questionnaire_companion,
         )
     
     # Check if this is a questionnaire command
@@ -177,6 +206,13 @@ def handle_chat(repo: Repository, payload: ChatRequest) -> ChatResponse:
                 role="assistant",
                 content=assistant_text,
             )
+            questionnaire_companion = _questionnaire_companion()
+            persist_pending_companion(
+                repo=repo,
+                conversation=conversation,
+                user_id=payload.user_id,
+                companion=questionnaire_companion,
+            )
             
             return ChatResponse(
                 conversation_id=conversation.id,
@@ -184,6 +220,7 @@ def handle_chat(repo: Repository, payload: ChatRequest) -> ChatResponse:
                 assistant_message_id=assistant_msg.id,
                 extraction=ExtractionSummary(source_document_id=source.id),
                 memory_context=[],
+                companion=questionnaire_companion,
             )
         else:
             # Template not found - fall through to normal chat
@@ -191,6 +228,15 @@ def handle_chat(repo: Repository, payload: ChatRequest) -> ChatResponse:
 
     # ── Phase 5: Intent-aware routing ──────────────────────
     classification = classify_intent(payload.message)
+    classification = apply_pending_action_intent(
+        classification=classification,
+        pending=pending_companion,
+    )
+    consume_pending = should_consume_pending_companion(
+        user_message=payload.message,
+        classification=classification,
+        pending=pending_companion,
+    )
 
     # Close active log session on non-log intent
     if classification.intent != "log":
@@ -206,14 +252,58 @@ def handle_chat(repo: Repository, payload: ChatRequest) -> ChatResponse:
 
     history = repo.list_conversation_messages(conversation_id=conversation.id, limit=10, user_id=payload.user_id)
     history_lines = [f"{msg.role}: {msg.content}" for msg in history]
-    memory_context = _build_memory_context(repo, payload.user_id, conversation.id)
+    snapshot = build_context_snapshot(repo, payload.user_id)
+    memory_context = snapshot.to_memory_context()
+    pending_execution: CompanionExecutionResult | None = None
+    if consume_pending and classification.intent == "chat" and pending_companion is not None:
+        pending_execution = execute_pending_companion(
+            repo=repo,
+            user_id=payload.user_id,
+            pending=pending_companion,
+            user_message=payload.message,
+        )
+        if pending_execution.applied:
+            snapshot = build_context_snapshot(repo, payload.user_id)
+            memory_context = snapshot.to_memory_context()
+    if consume_pending and classification.intent == "chat" and pending_companion is not None:
+        companion = _resolve_companion_after_pending(
+            pending_companion=pending_companion,
+            snapshot=snapshot,
+            execution=pending_execution,
+        )
+    else:
+        companion = _build_companion(
+            user_message=payload.message,
+            classification=classification,
+            snapshot=snapshot,
+        )
 
     if classification.intent == "log":
-        return _handle_log(repo, payload, conversation, now, memory_context, history_lines)
+        return _handle_log(
+            repo,
+            payload,
+            conversation,
+            now,
+            memory_context,
+            history_lines,
+            companion,
+            pending_companion,
+            consume_pending,
+        )
     elif classification.intent == "query":
-        return _handle_query(repo, payload, conversation, memory_context, history_lines)
+        return _handle_query(repo, payload, conversation, memory_context, history_lines, companion)
     else:
-        return _handle_chat(repo, payload, conversation, memory_context, history_lines)
+        return _handle_chat(
+            repo,
+            payload,
+            conversation,
+            snapshot,
+            memory_context,
+            history_lines,
+            companion,
+            execution_note=pending_execution.assistant_note if pending_execution else None,
+            note_only=bool(pending_execution and pending_execution.keep_pending),
+        )
 
 
 def _handle_log(
@@ -223,6 +313,9 @@ def _handle_log(
     now,
     memory_context: list[str],
     history_lines: list[str],
+    companion: CompanionDirective,
+    pending_companion: CompanionDirective | None,
+    consume_pending: bool,
 ) -> ChatResponse:
     """LOG intent: extract data, store everything, confirm what was stored."""
 
@@ -321,6 +414,20 @@ def _handle_log(
         role="assistant",
         content=assistant_text,
     )
+    refreshed_snapshot = build_context_snapshot(repo, payload.user_id)
+    response_companion = companion
+    if consume_pending and pending_companion is not None:
+        response_companion = _resolve_companion_after_pending(
+            pending_companion=pending_companion,
+            snapshot=refreshed_snapshot,
+            execution=None,
+        )
+    persist_pending_companion(
+        repo=repo,
+        conversation=conversation,
+        user_id=payload.user_id,
+        companion=response_companion,
+    )
 
     return ChatResponse(
         conversation_id=conversation.id,
@@ -335,7 +442,8 @@ def _handle_log(
             activity_ids=[a.id for a in activities],
             metric_ids=[m.id for m in metrics],
         ),
-        memory_context=memory_context,
+        memory_context=refreshed_snapshot.to_memory_context(),
+        companion=response_companion,
     )
 
 
@@ -345,6 +453,7 @@ def _handle_query(
     conversation,
     memory_context: list[str],
     history_lines: list[str],
+    companion: CompanionDirective,
 ) -> ChatResponse:
     """QUERY intent: retrieve data, respond with real numbers. No storage."""
     results = handle_query(repo, payload.user_id, payload.message)
@@ -366,6 +475,12 @@ def _handle_query(
         role="assistant",
         content=assistant_text,
     )
+    persist_pending_companion(
+        repo=repo,
+        conversation=conversation,
+        user_id=payload.user_id,
+        companion=companion,
+    )
 
     return ChatResponse(
         conversation_id=conversation.id,
@@ -373,6 +488,7 @@ def _handle_query(
         assistant_message_id=assistant_msg.id,
         extraction=ExtractionSummary(),
         memory_context=memory_context,
+        companion=companion,
     )
 
 
@@ -380,21 +496,36 @@ def _handle_chat(
     repo: Repository,
     payload: ChatRequest,
     conversation,
+    snapshot,
     memory_context: list[str],
     history_lines: list[str],
+    companion: CompanionDirective,
+    execution_note: str | None = None,
+    note_only: bool = False,
 ) -> ChatResponse:
     """CHAT intent: conversational reply. No extraction, no storage."""
-    assistant_text = generate_chat_reply(
-        user_message=payload.message,
-        memory_context=memory_context,
-        history_lines=history_lines,
-    )
+    if note_only and execution_note:
+        assistant_text = execution_note
+    else:
+        assistant_text = generate_companion_reply(
+            user_message=payload.message,
+            snapshot=snapshot,
+            directive=companion,
+            history_lines=history_lines,
+            execution_note=execution_note,
+        )
 
     assistant_msg = repo.append_conversation_message(
         conversation_id=conversation.id,
         user_id=payload.user_id,
         role="assistant",
         content=assistant_text,
+    )
+    persist_pending_companion(
+        repo=repo,
+        conversation=conversation,
+        user_id=payload.user_id,
+        companion=companion,
     )
 
     return ChatResponse(
@@ -403,4 +534,5 @@ def _handle_chat(
         assistant_message_id=assistant_msg.id,
         extraction=ExtractionSummary(),
         memory_context=memory_context,
+        companion=companion,
     )

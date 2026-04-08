@@ -45,6 +45,29 @@ EngagementEventType = Literal[
 ]
 QuestionType = Literal["numeric", "scale", "boolean", "text", "choice"]
 QuestionnaireSessionStatus = Literal["in_progress", "completed", "abandoned"]
+CompanionMode = Literal["intake", "clarify", "reflect", "guide", "commit", "review"]
+CompanionThread = Literal[
+    "questionnaire",
+    "daily_checkin",
+    "daily_capture",
+    "daily_focus",
+    "continuity_gap",
+    "stale_commitment",
+    "goal_alignment",
+    "pattern_review",
+    "general_query",
+    "general",
+]
+CompanionActionKind = Literal["clarify", "reflect", "guide", "commit"]
+CompanionResponseShape = Literal[
+    "checkin_state",
+    "open_text",
+    "task_status",
+    "plan_outline",
+    "questionnaire_answer",
+]
+DiscrepancyKind = Literal["commitment_drift", "goal_conflict", "identity_conflict"]
+DiscrepancyStatus = Literal["open", "resolved", "archived"]
 
 
 class SourceDocumentCreate(BaseModel):
@@ -479,6 +502,25 @@ class AuditLogEntry(BaseModel):
     after: dict = Field(default_factory=dict)
     changed_fields: list[str] = Field(default_factory=list)
     created_at: datetime
+
+
+class DiscrepancyEvent(BaseModel):
+    id: str
+    user_id: str
+    created_at: datetime
+    updated_at: datetime
+    kind: DiscrepancyKind
+    status: DiscrepancyStatus = "open"
+    summary: str
+    detail: str | None = None
+    related_task_id: str | None = None
+    related_goal_id: str | None = None
+    detected_at: datetime
+    resolved_at: datetime | None = None
+    evidence: list[str] = Field(default_factory=list)
+    metadata: dict = Field(default_factory=dict)
+
+
 class WeeklyReviewRequest(BaseModel):
     user_id: str
     week_start: date
@@ -513,6 +555,7 @@ class Conversation(BaseModel):
     created_at: datetime
     updated_at: datetime
     title: str | None = None
+    metadata: dict = Field(default_factory=dict)
 
 
 class ConversationMessage(BaseModel):
@@ -619,12 +662,36 @@ class UserProfile(BaseModel):
     updated_at: datetime
 
 
+class CompanionSignal(BaseModel):
+    key: str
+    summary: str
+    confidence: float | None = None
+
+
+class CompanionAction(BaseModel):
+    kind: CompanionActionKind
+    prompt: str = Field(min_length=1)
+    reason: str | None = None
+    expected_response: CompanionResponseShape = "open_text"
+    focus_items: list[str] = Field(default_factory=list)
+    inferred_from: list[str] = Field(default_factory=list)
+
+
+class CompanionDirective(BaseModel):
+    mode: CompanionMode
+    active_thread: CompanionThread
+    rationale: list[str] = Field(default_factory=list)
+    signals: list[CompanionSignal] = Field(default_factory=list)
+    actions: list[CompanionAction] = Field(default_factory=list)
+
+
 class ChatResponse(BaseModel):
     conversation_id: str
     assistant_message: str
     assistant_message_id: str
     extraction: ExtractionSummary
     memory_context: list[str] = Field(default_factory=list)
+    companion: CompanionDirective | None = None
 
 
 class SearchResult(BaseModel):

@@ -3,6 +3,8 @@ from __future__ import annotations
 from typing import Iterable, Literal
 
 from ..config import settings
+from ..schemas import CompanionDirective
+from .context_snapshot import ContextSnapshot
 
 # Export the openai client for use in other services
 try:
@@ -129,6 +131,103 @@ def _local_reply_chat(
     return " ".join(lines)
 
 
+def _local_reply_companion(
+    *,
+    user_message: str,
+    snapshot: ContextSnapshot,
+    directive: CompanionDirective,
+) -> str:
+    from datetime import datetime
+    import re
+
+    hour = datetime.now().hour
+    if hour < 6:
+        greeting = "You're up late."
+    elif hour < 12:
+        greeting = "Morning."
+    elif hour < 17:
+        greeting = "Afternoon."
+    else:
+        greeting = "Evening."
+
+    if re.search(r"\b(?:what can you do|who are you|help|how do you work)\b", user_message, re.I):
+        return (
+            "I'm MemoryChain. I keep factual logs clean, track your patterns over time, "
+            "and help turn the day into something deliberate instead of reactive."
+        )
+
+    signal_keys = {signal.key for signal in directive.signals}
+    signal_note = ""
+    high_conf_signal = next((signal for signal in directive.signals if (signal.confidence or 0.0) >= 0.8), None)
+    if high_conf_signal and high_conf_signal.key == "stress_signal":
+        signal_note = "You seem a little compressed already. "
+
+    primary_action = directive.actions[0] if directive.actions else None
+    if primary_action is not None:
+        lead = {
+            "clarify": "Let's get the state clean first.",
+            "reflect": "Let's name the pattern before we plan around it.",
+            "guide": "Let's shape the next move cleanly.",
+            "commit": "Let's make the commitment explicit.",
+        }.get(primary_action.kind, "Let's get precise.")
+        return f"{greeting} {signal_note}{lead} {primary_action.prompt}"
+
+    if directive.active_thread == "daily_checkin":
+        checkin_focus = "how did you sleep, and what is your energy like right now?"
+        if "low_recovery" in signal_keys:
+            checkin_focus = "before we plan anything heavy, how did you sleep and how much gas do you actually have?"
+        elif "low_mood_risk" in signal_keys:
+            checkin_focus = "give me the real state first: sleep, mood, energy, and what's weighing on you."
+
+        if snapshot.days_since_checkin and snapshot.days_since_checkin > 0:
+            return (
+                f"{greeting} {signal_note}Let's get a clean read on today first: {checkin_focus}"
+            )
+        return (
+            f"{greeting} {signal_note}Before we get into plans, give me the shape of today: {checkin_focus}"
+        )
+
+    if directive.active_thread == "continuity_gap":
+        adherence = f"{snapshot.adherence_rate_7d * 100:.0f}%" if snapshot.adherence_rate_7d is not None else "low"
+        return (
+            f"{greeting} You've been a little spotty lately ({adherence} adherence over the last week), "
+            "so let's ground this before planning: "
+            "what's actually true about today?"
+        )
+
+    if directive.active_thread == "stale_commitment":
+        focus = snapshot.open_task_titles[0] if snapshot.open_task_titles else "your oldest open loop"
+        goal_note = ""
+        if snapshot.active_goal_titles:
+            goal_note = f" It also affects `{snapshot.active_goal_titles[0]}`."
+        return (
+            f"{greeting} Before we add anything new, let's resolve the pressure point. "
+            f"Is `{focus}` still real for today, or has the plan changed?{goal_note}"
+        )
+
+    if directive.active_thread == "pattern_review":
+        pattern_note = ""
+        if snapshot.active_heuristic_rules:
+            pattern_note = f" I'm already tracking `{snapshot.active_heuristic_rules[0]}`."
+        elif snapshot.candidate_insight_titles:
+            pattern_note = f" One of the patterns waiting in the background is `{snapshot.candidate_insight_titles[0]}`."
+        return (
+            f"{greeting} A few patterns are waiting in the background.{pattern_note} "
+            "But I want today's picture first. "
+            "What kind of day are you walking into?"
+        )
+
+    if directive.active_thread == "daily_focus":
+        goal_focus = snapshot.active_goal_titles[0] if snapshot.active_goal_titles else "today"
+        return (
+            f"{greeting} What's the one thing today actually needs to revolve around, especially around `{goal_focus}`?"
+        )
+
+    return (
+        f"{greeting} Give me the current state, and I'll help shape the next move."
+    )
+
+
 # ── OpenAI replies ───────────────────────────────────────────
 
 def _openai_reply(
@@ -217,3 +316,44 @@ def generate_chat_reply(
     if llm:
         return llm
     return _local_reply_chat(user_message=user_message, memory_context=memory_context)
+
+
+def generate_companion_reply(
+    *,
+    user_message: str,
+    snapshot: ContextSnapshot,
+    directive: CompanionDirective,
+    history_lines: Iterable[str],
+    execution_note: str | None = None,
+) -> str:
+    """Generate a companion-style reply driven by a deterministic directive."""
+    history = list(history_lines)
+    context_lines = snapshot.to_memory_context()
+    context_lines.append(f"Companion mode: {directive.mode}")
+    context_lines.append(f"Active thread: {directive.active_thread}")
+    if directive.rationale:
+        context_lines.append("Rationale: " + "; ".join(directive.rationale[:3]))
+    if directive.signals:
+        context_lines.append(
+            "Signals: " + "; ".join(
+                f"{signal.key} ({signal.confidence:.2f})" if signal.confidence is not None else signal.key
+                for signal in directive.signals[:3]
+            )
+        )
+    if directive.actions:
+        context_lines.append(
+            "Primary action: "
+            + f"{directive.actions[0].kind} -> {directive.actions[0].prompt}"
+        )
+    if execution_note:
+        context_lines.append(f"Execution note: {execution_note}")
+    context = "\n".join(f"- {line}" for line in context_lines)
+    llm = _openai_reply(mode="chat", user_message=user_message, context_block=context, history_lines=history)
+    if llm:
+        if execution_note:
+            return f"{execution_note} {llm}"
+        return llm
+    reply = _local_reply_companion(user_message=user_message, snapshot=snapshot, directive=directive)
+    if execution_note:
+        return f"{execution_note} {reply}"
+    return reply

@@ -2,10 +2,13 @@ from pydantic import BaseModel
 import json
 import os
 from pathlib import Path
+import sys
 
 
 def _read_memorychain_config() -> dict:
     """Read ~/.memorychain/config.json if it exists."""
+    if os.getenv("MEMORYCHAIN_IGNORE_HOME_CONFIG") == "1" or "pytest" in sys.modules:
+        return {}
     config_file = Path.home() / ".memorychain" / "config.json"
     if config_file.exists():
         try:

@@ -204,7 +204,8 @@ def initialize(conn: sqlite3.Connection) -> None:
             user_id TEXT NOT NULL,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
-            title TEXT
+            title TEXT,
+            metadata_json TEXT NOT NULL DEFAULT '{}'
         );
 
         CREATE TABLE IF NOT EXISTS conversation_messages (
@@ -257,6 +258,25 @@ def initialize(conn: sqlite3.Connection) -> None:
             created_at TEXT NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS discrepancy_events (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'open',
+            summary TEXT NOT NULL,
+            detail TEXT,
+            related_task_id TEXT,
+            related_goal_id TEXT,
+            detected_at TEXT NOT NULL,
+            resolved_at TEXT,
+            evidence_json TEXT NOT NULL DEFAULT '[]',
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            FOREIGN KEY (related_task_id) REFERENCES tasks(id),
+            FOREIGN KEY (related_goal_id) REFERENCES goals(id)
+        );
+
         -- FTS5 search index (contentless — we manage content manually)
         CREATE VIRTUAL TABLE IF NOT EXISTS search_index USING fts5(
             object_type,
@@ -280,6 +300,9 @@ def initialize(conn: sqlite3.Connection) -> None:
 
         CREATE INDEX IF NOT EXISTS idx_audit_logs_user_created
         ON audit_logs (user_id, created_at);
+
+        CREATE INDEX IF NOT EXISTS idx_discrepancy_events_user_status
+        ON discrepancy_events (user_id, status, detected_at);
 
         CREATE INDEX IF NOT EXISTS idx_activities_user_effective
         ON activities (user_id, effective_at);
@@ -375,6 +398,8 @@ def initialize(conn: sqlite3.Connection) -> None:
     _migrate_add_column(conn, "weekly_reviews", "sparse_data_flags_json", "TEXT NOT NULL DEFAULT '[]'")
     _migrate_add_column(conn, "weekly_reviews", "notable_entries_json", "TEXT NOT NULL DEFAULT '[]'")
     _migrate_add_column(conn, "weekly_reviews", "llm_narrative", "TEXT")
+    _migrate_add_column(conn, "conversations", "metadata_json", "TEXT NOT NULL DEFAULT '{}'")
+    _migrate_add_column(conn, "discrepancy_events", "metadata_json", "TEXT NOT NULL DEFAULT '{}'")
 
     conn.commit()
 

@@ -14,6 +14,7 @@ from ..schemas import (
     ConversationMessage,
     DailyCheckin,
     DailyCheckinCreate,
+    DiscrepancyEvent,
     EngagementEvent,
     EngagementSummary,
     Goal,
@@ -636,6 +637,90 @@ class Repository:
             (user_id, limit, offset),
         ).fetchall()
         return [self._row_to_audit_log(row) for row in rows]
+
+    def create_discrepancy_event(
+        self,
+        *,
+        user_id: str,
+        kind: str,
+        summary: str,
+        detail: str | None = None,
+        related_task_id: str | None = None,
+        related_goal_id: str | None = None,
+        detected_at: datetime | None = None,
+        evidence: list[str] | None = None,
+        metadata: dict | None = None,
+    ) -> DiscrepancyEvent:
+        event_id = _new_id("disc")
+        now = _now_iso()
+        detected = (detected_at or datetime.now(timezone.utc)).isoformat()
+        self.conn.execute(
+            """
+            INSERT INTO discrepancy_events (
+                id, user_id, created_at, updated_at, kind, status, summary, detail,
+                related_task_id, related_goal_id, detected_at, resolved_at, evidence_json, metadata_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                event_id,
+                user_id,
+                now,
+                now,
+                kind,
+                "open",
+                summary,
+                detail,
+                related_task_id,
+                related_goal_id,
+                detected,
+                None,
+                _to_json(evidence or []),
+                _to_json(metadata or {}),
+            ),
+        )
+        self.conn.commit()
+        row = self.conn.execute(
+            "SELECT * FROM discrepancy_events WHERE id = ?",
+            (event_id,),
+        ).fetchone()
+        return self._row_to_discrepancy_event(row)
+
+    def list_discrepancy_events(
+        self,
+        *,
+        user_id: str,
+        status: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[DiscrepancyEvent]:
+        sql = "SELECT * FROM discrepancy_events WHERE user_id = ?"
+        params: list[object] = [user_id]
+        if status is not None:
+            sql += " AND status = ?"
+            params.append(status)
+        sql += " ORDER BY detected_at DESC LIMIT ? OFFSET ?"
+        params.extend([limit, offset])
+        rows = self.conn.execute(sql, tuple(params)).fetchall()
+        return [self._row_to_discrepancy_event(row) for row in rows]
+
+    def resolve_discrepancy_event(self, *, discrepancy_id: str, user_id: str) -> DiscrepancyEvent | None:
+        now = _now_iso()
+        cursor = self.conn.execute(
+            """
+            UPDATE discrepancy_events
+            SET status = 'resolved', resolved_at = ?, updated_at = ?
+            WHERE id = ? AND user_id = ? AND status = 'open'
+            """,
+            (now, now, discrepancy_id, user_id),
+        )
+        if cursor.rowcount == 0:
+            return None
+        self.conn.commit()
+        row = self.conn.execute(
+            "SELECT * FROM discrepancy_events WHERE id = ? AND user_id = ?",
+            (discrepancy_id, user_id),
+        ).fetchone()
+        return self._row_to_discrepancy_event(row) if row else None
 
     def rollback_audit_log(
         self,
@@ -1796,16 +1881,32 @@ class Repository:
         conv_id = _new_id("conv") if not conversation_id else conversation_id
         self.conn.execute(
             """
-            INSERT INTO conversations (id, user_id, created_at, updated_at, title)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO conversations (id, user_id, created_at, updated_at, title, metadata_json)
+            VALUES (?, ?, ?, ?, ?, ?)
             """,
-            (conv_id, user_id, now, now, title),
+            (conv_id, user_id, now, now, title, "{}"),
         )
         self.conn.commit()
         row = self.conn.execute(
             "SELECT * FROM conversations WHERE id = ?", (conv_id,)
         ).fetchone()
         return self._row_to_conversation(row)
+
+    def update_conversation_metadata(self, *, conversation_id: str, user_id: str, metadata: dict) -> Conversation | None:
+        self.conn.execute(
+            """
+            UPDATE conversations
+            SET metadata_json = ?, updated_at = ?
+            WHERE id = ? AND user_id = ?
+            """,
+            (_to_json(metadata), _now_iso(), conversation_id, user_id),
+        )
+        self.conn.commit()
+        row = self.conn.execute(
+            "SELECT * FROM conversations WHERE id = ? AND user_id = ?",
+            (conversation_id, user_id),
+        ).fetchone()
+        return self._row_to_conversation(row) if row else None
 
     def append_conversation_message(
         self,
@@ -2135,6 +2236,7 @@ class Repository:
             created_at=datetime.fromisoformat(row["created_at"]),
             updated_at=datetime.fromisoformat(row["updated_at"]),
             title=row["title"],
+            metadata=json.loads(row["metadata_json"] or "{}"),
         )
 
     def _row_to_message(self, row: sqlite3.Row) -> ConversationMessage:
@@ -2170,6 +2272,24 @@ class Repository:
             after=json.loads(row["after_json"]),
             changed_fields=json.loads(row["changed_fields_json"]),
             created_at=datetime.fromisoformat(row["created_at"]),
+        )
+
+    def _row_to_discrepancy_event(self, row: sqlite3.Row) -> DiscrepancyEvent:
+        return DiscrepancyEvent(
+            id=row["id"],
+            user_id=row["user_id"],
+            created_at=datetime.fromisoformat(row["created_at"]),
+            updated_at=datetime.fromisoformat(row["updated_at"]),
+            kind=row["kind"],
+            status=row["status"],
+            summary=row["summary"],
+            detail=row["detail"],
+            related_task_id=row["related_task_id"],
+            related_goal_id=row["related_goal_id"],
+            detected_at=datetime.fromisoformat(row["detected_at"]),
+            resolved_at=datetime.fromisoformat(row["resolved_at"]) if row["resolved_at"] else None,
+            evidence=json.loads(row["evidence_json"] or "[]"),
+            metadata=json.loads(row["metadata_json"] or "{}"),
         )
     def _row_to_prompt_cycle(self, row: sqlite3.Row) -> PromptCycle:
         return PromptCycle(

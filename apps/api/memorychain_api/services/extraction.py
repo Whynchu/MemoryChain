@@ -160,6 +160,43 @@ def _extract_metrics(
     return metrics
 
 
+def _normalize_metric_type(metric_name: str) -> str:
+    normalized = re.sub(r"[^a-z0-9]+", "_", metric_name.strip().lower()).strip("_")
+    aliases = {
+        "weight": "body_weight",
+        "body_weight": "body_weight",
+        "bodyweight": "body_weight",
+        "body_weight_lbs": "body_weight",
+        "heart_rate": "heart_rate",
+        "heartrate": "heart_rate",
+        "hydration": "hydration",
+        "water": "hydration",
+        "co2_hold": "co2_hold",
+        "co_2_hold": "co2_hold",
+        "total_strikes": "total_strikes",
+        "strikes": "total_strikes",
+    }
+    return aliases.get(normalized, normalized)
+
+
+def _extract_body_weight_unit(text: str) -> str | None:
+    match = re.search(r"(?i)(?:body\s*)?weight\s*[:\s]+(?:\d+(?:\.\d+)?)\s*(lbs?|kg|pounds?)\b", text)
+    if not match:
+        return None
+    unit = match.group(1).lower()
+    if unit.startswith("lb") or unit.startswith("pound"):
+        return "lbs"
+    return unit
+
+
+def _stringify_metric_value(value: object) -> str:
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        return str(int(value)) if value.is_integer() else str(value)
+    return str(value)
+
+
 # Minimum length for a chat message to be considered "substantive" enough for a journal entry
 _MIN_SUBSTANTIVE_LENGTH = 40
 _SUBSTANTIVE_PATTERNS = re.compile(
@@ -466,16 +503,36 @@ Be conservative - only extract data that is clearly present. Use null for missin
         metrics = []
         for metric_data in extracted_data.get("metrics", []):
             if metric_data.get("metric_name") and metric_data.get("value") is not None:
+                metric_type = _normalize_metric_type(metric_data["metric_name"])
+                value = _stringify_metric_value(metric_data["value"])
+                unit = metric_data.get("unit") or None
+                if metric_type == "body_weight" and not unit:
+                    unit = _extract_body_weight_unit(raw_text)
                 metrics.append(MetricObservationCreate(
                     user_id=user_id,
                     source_document_id=source_document_id,
                     effective_at=effective_at,
-                    metric_type=metric_data["metric_name"],
-                    value=str(metric_data["value"]),
-                    unit=metric_data.get("unit", ""),
+                    metric_type=metric_type,
+                    value=value,
+                    unit=unit,
                     provenance="system_extracted",
                 ))
-        
+
+        if checkin and checkin.body_weight is not None and not any(
+            metric.metric_type == "body_weight" for metric in metrics
+        ):
+            metrics.append(
+                MetricObservationCreate(
+                    user_id=user_id,
+                    source_document_id=source_document_id,
+                    effective_at=effective_at,
+                    metric_type="body_weight",
+                    value=_stringify_metric_value(checkin.body_weight),
+                    unit=_extract_body_weight_unit(raw_text),
+                    provenance="system_extracted",
+                )
+            )
+
         return ExtractionResult(
             journal_entry=journal,
             checkin=checkin,

@@ -3,6 +3,7 @@
 import pytest
 from unittest.mock import patch, MagicMock
 from datetime import date, datetime, timezone
+from types import SimpleNamespace
 
 from memorychain_api.services.intent import classify_intent, _classify_local, ClassificationResult
 from memorychain_api.services.query_handler import handle_query, _detect_topics, _recent_date_range, QueryResult
@@ -141,6 +142,12 @@ class TestQueryHandler:
         repo.list_insights.return_value = []
         repo.list_heuristics.return_value = []
         repo.list_activities.return_value = []
+        repo.list_discrepancy_events.return_value = []
+        repo.get_engagement_summary.return_value = SimpleNamespace(
+            adherence_rate=None,
+            longest_nonresponse_streak_days=0,
+        )
+        repo.get_user_profile.return_value = None
         return repo
 
     def test_sleep_query_empty(self, mock_repo):
@@ -184,7 +191,15 @@ class TestChatRouter:
         repo = MagicMock()
         conv = MagicMock()
         conv.id = "conv_123"
+        conv.metadata = {}
         repo.get_or_create_conversation.return_value = conv
+        repo.update_conversation_metadata.side_effect = (
+            lambda conversation_id, user_id, metadata: SimpleNamespace(
+                id=conversation_id,
+                user_id=user_id,
+                metadata=metadata,
+            )
+        )
 
         q_service_mock = MagicMock()
         q_service_mock.check_active_session.return_value = None
@@ -203,11 +218,18 @@ class TestChatRouter:
         repo.list_insights.return_value = []
         repo.list_heuristics.return_value = []
         repo.list_activities.return_value = []
+        repo.list_discrepancy_events.return_value = []
+        repo.get_engagement_summary.return_value = SimpleNamespace(
+            adherence_rate=None,
+            longest_nonresponse_streak_days=0,
+        )
+        repo.get_user_profile.return_value = None
         return repo
 
+    @patch("memorychain_api.services.chat.build_context_snapshot")
     @patch("memorychain_api.services.chat.classify_intent")
     @patch("memorychain_api.services.chat.QuestionnaireService")
-    def test_chat_intent_no_storage(self, MockQS, mock_classify, mock_repo):
+    def test_chat_intent_no_storage(self, MockQS, mock_classify, mock_snapshot, mock_repo):
         from memorychain_api.schemas import ChatRequest
         from memorychain_api.services.chat import handle_chat
 
@@ -216,12 +238,42 @@ class TestChatRouter:
         MockQS.return_value = qs_instance
 
         mock_classify.return_value = ClassificationResult(intent="chat", confidence=0.9)
+        mock_snapshot.return_value = SimpleNamespace(
+            has_checkin_today=False,
+            period="morning",
+            is_morning_window=True,
+            longest_nonresponse_streak_days=0,
+            adherence_rate_7d=None,
+            stale_task_count=0,
+            has_stale_commitment_pressure=False,
+            candidate_insight_count=0,
+            active_heuristic_count=0,
+            unresolved_discrepancy_count=0,
+            has_pattern_pressure=False,
+            has_goal_alignment_pressure=False,
+            active_goal_count=0,
+            days_since_checkin=None,
+            open_task_titles=[],
+            active_goal_titles=[],
+            active_heuristic_rules=[],
+            candidate_insight_titles=[],
+            likely_low_recovery=False,
+            likely_low_mood=False,
+            to_memory_context=lambda: ["Current time: Tuesday 9:00 AM (morning)"],
+        )
 
         payload = ChatRequest(user_id="u1", message="hey!")
         response = handle_chat(mock_repo, payload)
 
         assert response.assistant_message
         assert response.extraction.source_document_id is None
+        assert response.companion is not None
+        assert response.companion.active_thread == "daily_checkin"
+        assert response.companion.mode == "intake"
+        assert response.companion.actions[0].kind == "clarify"
+        assert response.companion.actions[0].expected_response == "checkin_state"
+        assert "sleep" in response.assistant_message.lower()
+        assert "pending_companion" in mock_repo.update_conversation_metadata.call_args.kwargs["metadata"]
         mock_repo.create_source_document.assert_not_called()
 
     @patch("memorychain_api.services.chat.classify_intent")
@@ -241,6 +293,9 @@ class TestChatRouter:
 
         assert response.assistant_message
         assert response.extraction.source_document_id is None
+        assert response.companion is not None
+        assert response.companion.mode == "review"
+        assert response.companion.actions[0].kind == "guide"
         mock_repo.create_source_document.assert_not_called()
 
     @patch("memorychain_api.services.chat.extract_objects")
@@ -274,8 +329,402 @@ class TestChatRouter:
         response = handle_chat(mock_repo, payload)
 
         assert response.extraction.source_document_id == "src_1"
+        assert response.companion is not None
+        assert response.companion.mode in ("intake", "commit")
+        assert response.companion.actions
+        assert response.companion.actions[0].kind == "clarify"
         mock_repo.create_source_document.assert_called_once()
         mock_extract.assert_called_once()
+
+    @patch("memorychain_api.services.chat.build_context_snapshot")
+    @patch("memorychain_api.services.chat.classify_intent")
+    @patch("memorychain_api.services.chat.extract_objects")
+    @patch("memorychain_api.services.chat.QuestionnaireService")
+    def test_pending_checkin_forces_followup_into_log(
+        self,
+        MockQS,
+        mock_extract,
+        mock_classify,
+        mock_snapshot,
+        mock_repo,
+    ):
+        from memorychain_api.schemas import ChatRequest
+        from memorychain_api.services.chat import handle_chat
+
+        qs_instance = MagicMock()
+        qs_instance.check_active_session.return_value = None
+        MockQS.return_value = qs_instance
+
+        mock_classify.return_value = ClassificationResult(intent="chat", confidence=0.7)
+        mock_repo.get_or_create_conversation.return_value.metadata = {
+            "pending_companion": {
+                "mode": "intake",
+                "active_thread": "daily_checkin",
+                "rationale": ["No check-in has been logged yet."],
+                "signals": [],
+                "actions": [
+                    {
+                        "kind": "clarify",
+                        "prompt": "Give me sleep, mood, energy, and the main tone of the morning.",
+                        "reason": "The highest-value move is to establish today's state before planning.",
+                        "expected_response": "checkin_state",
+                        "focus_items": ["sleep_hours", "mood", "energy"],
+                        "inferred_from": ["brief_opening"],
+                    }
+                ],
+            }
+        }
+
+        mock_snapshot.side_effect = [
+            SimpleNamespace(
+                has_checkin_today=False,
+                period="morning",
+                is_morning_window=True,
+                longest_nonresponse_streak_days=0,
+                adherence_rate_7d=None,
+                stale_task_count=0,
+                has_stale_commitment_pressure=False,
+                candidate_insight_count=0,
+                active_heuristic_count=0,
+                unresolved_discrepancy_count=0,
+                has_pattern_pressure=False,
+                has_goal_alignment_pressure=False,
+                active_goal_count=0,
+                days_since_checkin=1,
+                open_task_titles=[],
+                active_goal_titles=[],
+                active_heuristic_rules=[],
+                candidate_insight_titles=[],
+                likely_low_recovery=False,
+                likely_low_mood=False,
+                to_memory_context=lambda: ["Current time: Tuesday 9:00 AM (morning)"],
+            ),
+            SimpleNamespace(
+                has_checkin_today=True,
+                period="morning",
+                is_morning_window=True,
+                longest_nonresponse_streak_days=0,
+                adherence_rate_7d=None,
+                stale_task_count=0,
+                has_stale_commitment_pressure=False,
+                candidate_insight_count=0,
+                active_heuristic_count=0,
+                unresolved_discrepancy_count=0,
+                has_pattern_pressure=False,
+                has_goal_alignment_pressure=False,
+                active_goal_count=1,
+                days_since_checkin=0,
+                open_task_titles=[],
+                active_goal_titles=["Train cleanly"],
+                active_heuristic_rules=[],
+                candidate_insight_titles=[],
+                likely_low_recovery=False,
+                likely_low_mood=False,
+                to_memory_context=lambda: ["Active goals (1): Train cleanly"],
+            ),
+        ]
+
+        extraction_result = MagicMock()
+        extraction_result.journal_entry = None
+        extraction_result.checkin = None
+        extraction_result.goals = []
+        extraction_result.tasks = []
+        extraction_result.activities = []
+        extraction_result.metrics = []
+        mock_extract.return_value = extraction_result
+
+        source_doc = MagicMock()
+        source_doc.id = "src_1"
+        mock_repo.create_source_document.return_value = source_doc
+        mock_repo.find_active_log_source.return_value = None
+
+        payload = ChatRequest(user_id="u1", message="feeling rough and tired")
+        response = handle_chat(mock_repo, payload)
+
+        assert response.extraction.source_document_id == "src_1"
+        assert response.companion is not None
+        assert response.companion.active_thread == "daily_focus"
+        assert response.companion.actions[0].kind == "guide"
+        mock_repo.create_source_document.assert_called_once()
+        mock_extract.assert_called_once()
+
+    @patch("memorychain_api.services.chat.build_context_snapshot")
+    @patch("memorychain_api.services.chat.classify_intent")
+    @patch("memorychain_api.services.chat.QuestionnaireService")
+    def test_pending_task_status_updates_task_and_rethreads_companion(
+        self,
+        MockQS,
+        mock_classify,
+        mock_snapshot,
+        mock_repo,
+    ):
+        from memorychain_api.schemas import ChatRequest
+        from memorychain_api.services.chat import handle_chat
+
+        qs_instance = MagicMock()
+        qs_instance.check_active_session.return_value = None
+        MockQS.return_value = qs_instance
+
+        mock_classify.return_value = ClassificationResult(intent="chat", confidence=0.7)
+        mock_repo.get_or_create_conversation.return_value.metadata = {
+            "pending_companion": {
+                "mode": "guide",
+                "active_thread": "stale_commitment",
+                "rationale": ["There are stale open loops competing with new planning."],
+                "signals": [],
+                "actions": [
+                    {
+                        "kind": "commit",
+                        "prompt": "Decide whether `Finish refactor` is still real.",
+                        "reason": "Stale commitments distort planning until they are made explicit.",
+                        "expected_response": "task_status",
+                        "focus_items": ["Finish refactor", "Ship companion"],
+                        "inferred_from": ["stale_commitment_pressure"],
+                    }
+                ],
+            }
+        }
+        mock_repo.list_open_tasks.return_value = [
+            SimpleNamespace(id="task_1", title="Finish refactor", status="todo")
+        ]
+        mock_repo.update_task.return_value = SimpleNamespace(id="task_1", title="Finish refactor", status="canceled")
+        mock_repo.create_discrepancy_event.return_value = SimpleNamespace(id="disc_1")
+
+        mock_snapshot.side_effect = [
+            SimpleNamespace(
+                has_checkin_today=True,
+                period="afternoon",
+                is_morning_window=False,
+                longest_nonresponse_streak_days=0,
+                adherence_rate_7d=0.8,
+                stale_task_count=1,
+                has_stale_commitment_pressure=True,
+                candidate_insight_count=0,
+                active_heuristic_count=0,
+                unresolved_discrepancy_count=0,
+                has_pattern_pressure=False,
+                has_goal_alignment_pressure=False,
+                active_goal_count=1,
+                days_since_checkin=0,
+                open_task_titles=["Finish refactor"],
+                active_goal_titles=["Ship companion"],
+                active_heuristic_rules=[],
+                candidate_insight_titles=[],
+                likely_low_recovery=False,
+                likely_low_mood=False,
+                to_memory_context=lambda: ["Open tasks (1): Finish refactor"],
+            ),
+            SimpleNamespace(
+                has_checkin_today=True,
+                period="afternoon",
+                is_morning_window=False,
+                longest_nonresponse_streak_days=0,
+                adherence_rate_7d=0.8,
+                stale_task_count=0,
+                has_stale_commitment_pressure=False,
+                candidate_insight_count=0,
+                active_heuristic_count=0,
+                unresolved_discrepancy_count=1,
+                has_pattern_pressure=False,
+                has_goal_alignment_pressure=True,
+                active_goal_count=1,
+                days_since_checkin=0,
+                open_task_titles=[],
+                active_goal_titles=["Ship companion"],
+                active_heuristic_rules=[],
+                candidate_insight_titles=[],
+                recent_discrepancy_ids=["disc_1"],
+                recent_discrepancy_summaries=["Canceled `Finish refactor` after it stayed open without follow-through."],
+                likely_low_recovery=False,
+                likely_low_mood=False,
+                to_memory_context=lambda: ["Active goals (1): Ship companion"],
+            ),
+        ]
+
+        payload = ChatRequest(user_id="u1", message="kill it")
+        response = handle_chat(mock_repo, payload)
+
+        assert response.companion is not None
+        assert response.companion.active_thread == "goal_alignment"
+        assert "canceled" in response.assistant_message.lower()
+        assert mock_repo.create_discrepancy_event.called
+        assert mock_repo.update_task.call_args.kwargs["payload"].status == "canceled"
+        mock_repo.create_source_document.assert_not_called()
+
+    @patch("memorychain_api.services.chat.build_context_snapshot")
+    @patch("memorychain_api.services.chat.classify_intent")
+    @patch("memorychain_api.services.chat.QuestionnaireService")
+    def test_pending_plan_outline_creates_task(
+        self,
+        MockQS,
+        mock_classify,
+        mock_snapshot,
+        mock_repo,
+    ):
+        from memorychain_api.schemas import ChatRequest
+        from memorychain_api.services.chat import handle_chat
+
+        qs_instance = MagicMock()
+        qs_instance.check_active_session.return_value = None
+        MockQS.return_value = qs_instance
+
+        mock_classify.return_value = ClassificationResult(intent="chat", confidence=0.7)
+        mock_repo.get_or_create_conversation.return_value.metadata = {
+            "pending_companion": {
+                "mode": "commit",
+                "active_thread": "goal_alignment",
+                "rationale": ["Recent commitment drift should be named before ordinary planning."],
+                "signals": [],
+                "actions": [
+                    {
+                        "kind": "commit",
+                        "prompt": "State the concrete version you are actually willing to do.",
+                        "reason": "Declared plans should be grounded in likely follow-through.",
+                        "expected_response": "plan_outline",
+                        "focus_items": ["Ship companion", "Canceled `Finish refactor` after it stayed open without follow-through.", "discrepancy:disc_1", "alignment_commitment"],
+                        "inferred_from": [],
+                    }
+                ],
+            }
+        }
+        mock_repo.list_open_tasks.return_value = []
+        mock_repo.create_task.return_value = SimpleNamespace(id="task_2", title="Write the CLI morning flow")
+        mock_repo.resolve_discrepancy_event.return_value = SimpleNamespace(id="disc_1", status="resolved")
+
+        mock_snapshot.side_effect = [
+            SimpleNamespace(
+                has_checkin_today=True,
+                period="afternoon",
+                is_morning_window=False,
+                longest_nonresponse_streak_days=0,
+                adherence_rate_7d=0.8,
+                stale_task_count=0,
+                has_stale_commitment_pressure=False,
+                candidate_insight_count=0,
+                active_heuristic_count=0,
+                unresolved_discrepancy_count=1,
+                has_pattern_pressure=False,
+                has_goal_alignment_pressure=True,
+                active_goal_count=1,
+                days_since_checkin=0,
+                open_task_titles=[],
+                active_goal_titles=["Ship companion"],
+                active_heuristic_rules=[],
+                candidate_insight_titles=[],
+                recent_discrepancy_ids=["disc_1"],
+                recent_discrepancy_summaries=["Canceled `Finish refactor` after it stayed open without follow-through."],
+                likely_low_recovery=False,
+                likely_low_mood=False,
+                to_memory_context=lambda: ["Active goals (1): Ship companion"],
+            ),
+            SimpleNamespace(
+                has_checkin_today=True,
+                period="afternoon",
+                is_morning_window=False,
+                longest_nonresponse_streak_days=0,
+                adherence_rate_7d=0.8,
+                stale_task_count=0,
+                has_stale_commitment_pressure=False,
+                candidate_insight_count=0,
+                active_heuristic_count=0,
+                unresolved_discrepancy_count=0,
+                has_pattern_pressure=False,
+                has_goal_alignment_pressure=False,
+                active_goal_count=1,
+                days_since_checkin=0,
+                open_task_titles=["Write the CLI morning flow"],
+                active_goal_titles=["Ship companion"],
+                active_heuristic_rules=[],
+                candidate_insight_titles=[],
+                recent_discrepancy_ids=[],
+                recent_discrepancy_summaries=[],
+                likely_low_recovery=False,
+                likely_low_mood=False,
+                to_memory_context=lambda: ["Open tasks (1): Write the CLI morning flow"],
+            ),
+        ]
+
+        payload = ChatRequest(user_id="u1", message="I will write the CLI morning flow.")
+        response = handle_chat(mock_repo, payload)
+
+        assert response.companion is not None
+        assert "created a task" in response.assistant_message.lower()
+        assert mock_repo.create_task.call_args.args[0].title == "write the CLI morning flow"
+        assert mock_repo.resolve_discrepancy_event.call_args.kwargs["discrepancy_id"] == "disc_1"
+        mock_repo.create_source_document.assert_not_called()
+
+    @patch("memorychain_api.services.chat.build_context_snapshot")
+    @patch("memorychain_api.services.chat.classify_intent")
+    @patch("memorychain_api.services.chat.QuestionnaireService")
+    def test_ambiguous_task_status_keeps_pending_action(
+        self,
+        MockQS,
+        mock_classify,
+        mock_snapshot,
+        mock_repo,
+    ):
+        from memorychain_api.schemas import ChatRequest
+        from memorychain_api.services.chat import handle_chat
+
+        qs_instance = MagicMock()
+        qs_instance.check_active_session.return_value = None
+        MockQS.return_value = qs_instance
+
+        mock_classify.return_value = ClassificationResult(intent="chat", confidence=0.7)
+        mock_repo.get_or_create_conversation.return_value.metadata = {
+            "pending_companion": {
+                "mode": "guide",
+                "active_thread": "stale_commitment",
+                "rationale": ["There are stale open loops competing with new planning."],
+                "signals": [],
+                "actions": [
+                    {
+                        "kind": "commit",
+                        "prompt": "Decide whether `Finish refactor` is still real.",
+                        "reason": "Stale commitments distort planning until they are made explicit.",
+                        "expected_response": "task_status",
+                        "focus_items": ["Finish refactor", "Ship companion"],
+                        "inferred_from": ["stale_commitment_pressure"],
+                    }
+                ],
+            }
+        }
+        mock_repo.list_open_tasks.return_value = [
+            SimpleNamespace(id="task_1", title="Finish refactor", status="todo")
+        ]
+        mock_snapshot.return_value = SimpleNamespace(
+            has_checkin_today=True,
+            period="afternoon",
+            is_morning_window=False,
+            longest_nonresponse_streak_days=0,
+            adherence_rate_7d=0.8,
+            stale_task_count=1,
+            has_stale_commitment_pressure=True,
+            candidate_insight_count=0,
+            active_heuristic_count=0,
+            unresolved_discrepancy_count=0,
+            has_pattern_pressure=False,
+            has_goal_alignment_pressure=False,
+            active_goal_count=1,
+            days_since_checkin=0,
+            open_task_titles=["Finish refactor"],
+            active_goal_titles=["Ship companion"],
+            active_heuristic_rules=[],
+            candidate_insight_titles=[],
+            recent_discrepancy_ids=[],
+            recent_discrepancy_summaries=[],
+            likely_low_recovery=False,
+            likely_low_mood=False,
+            to_memory_context=lambda: ["Open tasks (1): Finish refactor"],
+        )
+
+        payload = ChatRequest(user_id="u1", message="maybe")
+        response = handle_chat(mock_repo, payload)
+
+        assert response.companion is not None
+        assert response.companion.active_thread == "stale_commitment"
+        assert "keep it, renegotiate it, or kill it" in response.assistant_message.lower()
+        mock_repo.update_task.assert_not_called()
 
     @patch("memorychain_api.services.chat.classify_intent")
     def test_questionnaire_bypasses_intent(self, mock_classify, mock_repo):
@@ -302,3 +751,6 @@ class TestChatRouter:
 
             mock_classify.assert_not_called()
             assert "Next question?" in response.assistant_message
+            assert response.companion is not None
+            assert response.companion.active_thread == "questionnaire"
+            assert response.companion.actions[0].expected_response == "questionnaire_answer"
